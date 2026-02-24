@@ -4,4 +4,19 @@
    <FileRef
       location = "self:">
    </FileRef>
+   <FileRef
+      location = "group:SettingsView.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ProjectCache.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ProjectCache 2.swift">
+   </FileRef>
+   <FileRef
+      location = "group:ProjectCache 3.swift">
+   </FileRef>
+   <FileRef
+      location = "group:TaskHubMobile.entitlements">
+   </FileRef>
 </Workspace>
