@@ -15,12 +15,14 @@ final class TaskItem {
     var completed: Bool
     var updatedAt: Date
     var dueAt: Date?
+    var project: String?
 
-    init(serverID: String, title: String, completed: Bool, updatedAt: Date, dueAt: Date? = nil) {
+    init(serverID: String, title: String, completed: Bool, updatedAt: Date, dueAt: Date? = nil, project: String? = nil) {
         self.serverID = serverID
         self.title = title
         self.completed = completed
         self.updatedAt = updatedAt
         self.dueAt = dueAt
+        self.project = project
     }
 }

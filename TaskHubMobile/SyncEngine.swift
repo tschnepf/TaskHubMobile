@@ -105,8 +105,9 @@ actor SyncEngine {
                     existing.completed = dto.is_completed
                     existing.dueAt = dto.due_at
                     existing.updatedAt = dto.updated_at
+                    existing.project = dto.project
                 } else {
-                    let item = TaskItem(serverID: dto.id, title: dto.title, completed: dto.is_completed, updatedAt: dto.updated_at, dueAt: dto.due_at)
+                    let item = TaskItem(serverID: dto.id, title: dto.title, completed: dto.is_completed, updatedAt: dto.updated_at, dueAt: dto.due_at, project: dto.project)
                     context.insert(item)
                 }
             }
@@ -162,11 +163,13 @@ actor SyncEngine {
                 var isCompleted: Bool = false
                 var dueAt: Date? = nil
                 var updatedAt: Date = e.occurred_at
+                var project: String? = nil
 
                 if let v = summary["title"], case let MobileDeltaJSONValue.string(t) = v { title = t }
                 if let v = summary["is_completed"], case let MobileDeltaJSONValue.bool(b) = v { isCompleted = b }
                 if let v = summary["due_at"], case let MobileDeltaJSONValue.string(s) = v { dueAt = parseISO8601(s) }
                 if let v = summary["updated_at"], case let MobileDeltaJSONValue.string(s) = v, let d = parseISO8601(s) { updatedAt = d }
+                if let v = summary["project"], case let MobileDeltaJSONValue.string(p) = v { project = p }
 
                 print("[Import] Event type=\(e.event_type) serverID=\(serverID) tombstone=\(e.tombstone) title=\(title ?? "<nil>")")
 
@@ -185,8 +188,9 @@ actor SyncEngine {
                     existing.completed = isCompleted
                     existing.dueAt = dueAt
                     existing.updatedAt = updatedAt
+                    if let p = project { existing.project = p }
                 } else {
-                    let newItem = TaskItem(serverID: serverID, title: title ?? "Untitled", completed: isCompleted, updatedAt: updatedAt, dueAt: dueAt)
+                    let newItem = TaskItem(serverID: serverID, title: title ?? "Untitled", completed: isCompleted, updatedAt: updatedAt, dueAt: dueAt, project: project)
                     context.insert(newItem)
                     all.append(newItem)
                 }

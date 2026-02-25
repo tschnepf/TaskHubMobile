@@ -11,9 +11,19 @@ import SwiftData
 struct TaskListView: View {
     @Query(sort: \TaskItem.updatedAt, order: .reverse) private var tasks: [TaskItem]
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var appConfig: AppConfig
+    @EnvironmentObject private var authStore: AuthStore
     @State private var editTaskID: String? = nil
     @State private var editTitle: String = ""
     @State private var expandedTaskID: String? = nil
+    @State private var editHasDueDate: Bool = false
+    @State private var editDueDate: Date = .now
+    @State private var editArea: TaskArea = .personal
+    @State private var editPriority: TaskPriority = .three
+    @State private var editRepeat: RepeatRule = .none
+    @State private var editProjectName: String = ""
+    @State private var errorMessage: String? = nil
+    @State private var isSaving: Bool = false
 
     var body: some View {
         if tasks.isEmpty {
@@ -40,7 +50,11 @@ struct TaskListView: View {
                         startEdit(task)
                     } label: {
                         VStack(alignment: .leading) {
-                            Text(task.title)
+                            if let name = task.project, !name.isEmpty {
+                                Text("\(name) \(task.title)")
+                            } else {
+                                Text(task.title)
+                            }
                             Text(task.updatedAt, style: .date)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -54,26 +68,84 @@ struct TaskListView: View {
                 // Inline editor expands between rows
                 if expandedTaskID == task.serverID {
                     VStack(alignment: .leading, spacing: 12) {
+                        // Title
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Title").font(.caption).foregroundStyle(.secondary)
                             TextField("Task title", text: $editTitle)
                                 .textFieldStyle(.roundedBorder)
                         }
+
+                        // Area
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Area").font(.caption).foregroundStyle(.secondary)
+                            Picker("Area", selection: $editArea) {
+                                Text("Personal").tag(TaskArea.personal)
+                                Text("Work").tag(TaskArea.work)
+                            }
+                            .pickerStyle(.segmented)
+                        }
+
+                        // Priority
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Priority").font(.caption).foregroundStyle(.secondary)
+                            Picker("Priority", selection: $editPriority) {
+                                ForEach(TaskPriority.allCases) { p in
+                                    Text(p.displayName).tag(p)
+                                }
+                            }
+                        }
+
+                        // Repeat
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Repeat").font(.caption).foregroundStyle(.secondary)
+                            Picker("Repeat", selection: $editRepeat) {
+                                ForEach(RepeatRule.allCases) { r in
+                                    Text(r.rawValue.capitalized).tag(r)
+                                }
+                            }
+                        }
+
+                        // Project
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Project").font(.caption).foregroundStyle(.secondary)
+                            TextField("Project (optional)", text: $editProjectName)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        // Due Date
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle("Has due date", isOn: $editHasDueDate.animation())
+                            if editHasDueDate {
+                                DatePicker("Due Date", selection: $editDueDate, displayedComponents: [.date])
+                            }
+                        }
+
                         HStack {
                             Button("Cancel") {
                                 withAnimation { expandedTaskID = nil }
                             }
                             Spacer()
-                            Button("Save") {
-                                saveEdits()
+                            Button(action: { Task { await saveEdits() } }) {
+                                if isSaving {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                } else {
+                                    Text("Save")
+                                }
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(isSaving)
                         }
                     }
                     .padding(.vertical, 8)
                 }
             }
             .listStyle(.plain)
+            .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(errorMessage ?? "")
+            }
         }
     }
 
@@ -85,19 +157,48 @@ struct TaskListView: View {
         }
         editTaskID = task.serverID
         editTitle = task.title
+        if let due = task.dueAt { editDueDate = due; editHasDueDate = true } else { editHasDueDate = false }
+        editArea = .personal
+        editPriority = .three
+        editRepeat = .none
+        editProjectName = ""
         withAnimation { expandedTaskID = task.serverID }
     }
 
-    private func saveEdits() {
+    @MainActor
+    private func saveEdits() async
+    {
         guard let id = editTaskID else { return }
-        // Fetch the task by id from the modelContext
-        if let item = try? modelContext.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.serverID == id })).first {
-            item.title = editTitle
-            item.updatedAt = Date()
-            try? modelContext.save()
+        isSaving = true
+        defer { isSaving = false }
+        print("[Edit] Save tapped for id=\(id)")
+        let client = APIClient(baseURLProvider: { appConfig.baseURL }, authStore: authStore)
+        let due = editHasDueDate ? editDueDate : nil
+        do {
+            _ = try await client.updateTask(
+                id: id,
+                title: editTitle,
+                completed: nil,
+                dueAt: due,
+                projectName: editProjectName.isEmpty ? nil : editProjectName,
+                area: editArea,
+                priority: editPriority,
+                repeatRule: editRepeat
+            )
+            if let item = try? modelContext.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.serverID == id })).first {
+                item.title = editTitle
+                item.dueAt = due
+                item.project = editProjectName.isEmpty ? nil : editProjectName
+                item.updatedAt = Date()
+                try? modelContext.save()
+            }
+            withAnimation { expandedTaskID = nil }
+            editTaskID = nil
+            print("[Edit] Save completed for id=\(id)")
+        } catch {
+            print("[Edit] Save failed for id=\(id):", error.localizedDescription)
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
-        withAnimation { expandedTaskID = nil }
-        editTaskID = nil
     }
 
     private func deleteTask(_ task: TaskItem) {

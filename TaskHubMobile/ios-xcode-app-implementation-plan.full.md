@@ -722,12 +722,14 @@ struct TaskDTO: Codable, Identifiable {
         case title
         case completed = "is_completed"
         case dueAt = "due_at"
+        case project
     }
 
     let id: String
     let title: String
     let completed: Bool
     let dueAt: Date?
+    let project: String?
 }
 
 // MARK: - SwiftData Model
@@ -738,16 +740,18 @@ final class TaskItem {
     var title: String
     var isCompleted: Bool
     var dueAt: Date?
+    var project: String?
 
     // Client-side metadata
     var updatedAt: Date
     var isDirty: Bool
 
-    init(id: String, title: String, isCompleted: Bool, dueAt: Date?, updatedAt: Date = Date(), isDirty: Bool = false) {
+    init(id: String, title: String, isCompleted: Bool, dueAt: Date?, project: String? = nil, updatedAt: Date = Date(), isDirty: Bool = false) {
         self.id = id
         self.title = title
         self.isCompleted = isCompleted
         self.dueAt = dueAt
+        self.project = project
         self.updatedAt = updatedAt
         self.isDirty = isDirty
     }
@@ -1085,9 +1089,10 @@ final class PersistenceController {
                     item.title = dto.title
                     item.isCompleted = dto.completed
                     item.dueAt = dto.dueAt
+                    item.project = dto.project
                     item.updatedAt = Date()
                 } else {
-                    let _ = TaskItem(id: dto.id, title: dto.title, isCompleted: dto.completed, dueAt: dto.dueAt)
+                    let _ = TaskItem(id: dto.id, title: dto.title, isCompleted: dto.completed, dueAt: dto.dueAt, project: dto.project)
                 }
             }
             try context.save()
@@ -1110,7 +1115,7 @@ final class PersistenceController {
     func fetchDirtyTasksDTO() async -> [TaskDTO] {
         do {
             let dirty = try context.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.isDirty == true }))
-            return dirty.map { TaskDTO(id: $0.id, title: $0.title, completed: $0.isCompleted, dueAt: $0.dueAt) }
+            return dirty.map { TaskDTO(id: $0.id, title: $0.title, completed: $0.isCompleted, dueAt: $0.dueAt, project: $0.project) }
         } catch {
             return []
         }
@@ -1145,7 +1150,7 @@ final class PersistenceController {
                 filtered = items
             }
             let top = Array(filtered.prefix(limit))
-            return top.map { TaskDTO(id: $0.id, title: $0.title, completed: $0.isCompleted, dueAt: $0.dueAt) }
+            return top.map { TaskDTO(id: $0.id, title: $0.title, completed: $0.isCompleted, dueAt: $0.dueAt, project: $0.project) }
         } catch {
             return []
         }
@@ -1644,7 +1649,13 @@ struct MainTaskListView: View {
                             Spacer().frame(width: 6)
 
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(task.title)
+                                Group {
+                                    if let name = task.project, !name.isEmpty {
+                                        Text("\(name) \(task.title)")
+                                    } else {
+                                        Text(task.title)
+                                    }
+                                }
                                 if let due = task.dueAt {
                                     Text("Due: \(due.formatted(date: .abbreviated, time: .omitted))")
                                         .font(.caption)
@@ -1820,7 +1831,7 @@ struct MainTaskListView: View {
         editTaskID = task.id
         editTitle = task.title
         if let due = task.dueAt { editDueDate = due; editHasDueDate = true } else { editHasDueDate = false }
-        editProjectName = ""
+        editProjectName = task.project ?? ""
         editProjectSuggestions = []
         editArea = .personal
         editPriority = .three
@@ -1898,7 +1909,8 @@ struct MainTaskListView: View {
         guard let id = editTaskID else { return }
         let due: Date? = editHasDueDate ? editDueDate : nil
         do {
-            let updated = try await env.apiClient.updateTask(
+            // Changed per instruction: discard returned TaskDTO, update local SwiftData state directly
+            _ = try await env.apiClient.updateTask(
                 id: id,
                 title: editTitle,
                 completed: nil,
@@ -1908,8 +1920,16 @@ struct MainTaskListView: View {
                 priority: editPriority,
                 repeatRule: editRepeat
             )
-            await env.syncEngine.upsertTasks([updated])
+            // Update local data model directly to reflect saved changes
             await MainActor.run {
+                if let task = tasks.first(where: { $0.id == id }) {
+                    task.title = editTitle
+                    task.dueAt = due
+                    task.project = editProjectName.isEmpty ? nil : editProjectName
+                    task.updatedAt = Date()
+                    task.isDirty = true // Mark dirty so sync can push changes
+                    try? modelContext.save()
+                }
                 expandedTaskID = nil
                 editTaskID = nil
                 editProjectSuggestions = []

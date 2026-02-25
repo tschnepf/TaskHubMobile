@@ -212,5 +212,53 @@ struct APIClient {
     func listProjects() async throws -> [ProjectDTO] {
         return try await get("api/mobile/v1/projects")
     }
+
+    // MARK: - Tasks: Update
+    func updateTask(id: String, title: String?, completed: Bool?, dueAt: Date?, projectName: String? = nil, area: TaskArea? = nil, priority: TaskPriority? = nil, repeatRule: RepeatRule? = nil) async throws -> MobileTaskDetailDTO {
+        guard let base = baseURLProvider() else { throw APIClientError.missingBaseURL }
+        let url = base.appendingPathComponent("api/mobile/v1/tasks/") .appendingPathComponent(id)
+        var req = URLRequest(url: url)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        try await attachAuth(&req)
+        var payload: [String: Any] = [:]
+        if let title { payload["title"] = title }
+        if let completed { payload["is_completed"] = completed }
+        if let dueAt {
+            let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]
+            payload["due_at"] = f.string(from: dueAt)
+        }
+        if let projectName, !projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { payload["project"] = projectName }
+        if let area { payload["area"] = area.rawValue }
+        if let priority { payload["priority"] = priority.rawValue }
+        if let repeatRule { payload["recurrence"] = repeatRule.rawValue }
+
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        var (data, resp) = try await APIClient.urlSession.data(for: req)
+        if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
+            await authStore.refresh()
+            try await attachAuth(&req)
+            (data, resp) = try await APIClient.urlSession.data(for: req)
+        }
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200...299:
+            let decoder = JSONDecoder.mobileRFC3339()
+            do {
+                return try decoder.decode(MobileTaskDetailDTO.self, from: data)
+            } catch {
+                throw APIClientError.decodingError
+            }
+        case 401:
+            throw APIClientError.unauthorized
+        default:
+            if let envelope = try? JSONDecoder().decode(APIErrorEnvelope.self, from: data) {
+                throw APIClientError.serverError(code: envelope.error.code, message: envelope.error.message, requestID: envelope.request_id, details: data)
+            }
+            throw URLError(.badServerResponse)
+        }
+    }
 }
 

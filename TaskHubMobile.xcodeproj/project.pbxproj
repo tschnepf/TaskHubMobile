@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		22E7F2A82F4E86F6006743D5 /* MobileTaskDTOs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E7F2A72F4E86F6006743D5 /* MobileTaskDTOs.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		22092D5D2F49022E00F1A70E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +31,7 @@
 		22092D4F2F49022C00F1A70E /* TaskHubMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TaskHubMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		22092D5C2F49022D00F1A70E /* TaskHubMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaskHubMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		22092D662F49022E00F1A70E /* TaskHubMobileUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaskHubMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		22E7F2A72F4E86F6006743D5 /* MobileTaskDTOs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTaskDTOs.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -79,6 +84,7 @@
 				22092D5F2F49022E00F1A70E /* TaskHubMobileTests */,
 				22092D692F49022E00F1A70E /* TaskHubMobileUITests */,
 				22092D502F49022C00F1A70E /* Products */,
+				22E7F2A72F4E86F6006743D5 /* MobileTaskDTOs.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -236,6 +242,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				22E7F2A82F4E86F6006743D5 /* MobileTaskDTOs.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
