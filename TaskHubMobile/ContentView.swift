@@ -35,7 +35,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                TaskListView()
+                TaskPagerView()
                     .refreshable {
                         if networkMonitor.isOnline {
                             syncController.syncNow()
@@ -96,6 +96,13 @@ struct ContentView: View {
                     .padding(.vertical, 4)
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        syncController.syncNow()
+                    } label: {
+                        Label("Sync Now", systemImage: "arrow.clockwise")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         addSheetTitle = ""

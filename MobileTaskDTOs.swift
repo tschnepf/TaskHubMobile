@@ -78,6 +78,14 @@ struct MobileTaskSummaryDTO: Decodable, Equatable {
     let is_completed: Bool
     let due_at: Date?
     let updated_at: Date
+    let projectId: String?
+    let projectName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, is_completed, due_at, updated_at
+        case projectId = "project"
+        case projectName = "project_name"
+    }
 }
 
 struct MobileTaskDetailDTO: Decodable, Equatable {
@@ -85,10 +93,11 @@ struct MobileTaskDetailDTO: Decodable, Equatable {
     let title: String
     let description: String?
     let notes: String?
-    let attachments: [String]? // Placeholder; adjust to actual shape when needed
+    let attachments: [String]?
     let intent: MobileTaskIntent?
     let area: MobileTaskArea?
-    let project: String? // UUID string or null
+    let projectId: String?
+    let projectName: String?
     let status: MobileTaskStatus?
     let priority: Int?
     let due_at: Date?
@@ -98,4 +107,10 @@ struct MobileTaskDetailDTO: Decodable, Equatable {
     let created_at: Date?
     let updated_at: Date?
     let is_completed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, description, notes, attachments, intent, area, status, priority, due_at, recurrence, completed_at, position, created_at, updated_at, is_completed
+        case projectId = "project"
+        case projectName = "project_name"
+    }
 }

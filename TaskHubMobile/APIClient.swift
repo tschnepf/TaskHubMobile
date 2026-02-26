@@ -260,5 +260,34 @@ struct APIClient {
             throw URLError(.badServerResponse)
         }
     }
+
+    // MARK: - Tasks: Detail
+    func getTaskDetail(id: String) async throws -> MobileTaskDetailDTO {
+        guard let base = baseURLProvider() else { throw APIClientError.missingBaseURL }
+        let url = base.appendingPathComponent("api/mobile/v1/tasks/").appendingPathComponent(id)
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        try await attachAuth(&req)
+        var (data, resp) = try await APIClient.urlSession.data(for: req)
+        if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
+            await authStore.refresh()
+            try await attachAuth(&req)
+            (data, resp) = try await APIClient.urlSession.data(for: req)
+        }
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        switch http.statusCode {
+        case 200...299:
+            let decoder = JSONDecoder.mobileRFC3339()
+            return try decoder.decode(MobileTaskDetailDTO.self, from: data)
+        case 401:
+            throw APIClientError.unauthorized
+        default:
+            if let env = try? JSONDecoder().decode(APIErrorEnvelope.self, from: data) {
+                throw APIClientError.serverError(code: env.error.code, message: env.error.message, requestID: env.request_id, details: data)
+            }
+            throw URLError(.badServerResponse)
+        }
+    }
 }
 

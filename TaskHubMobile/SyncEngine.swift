@@ -87,11 +87,43 @@ actor SyncEngine {
     private func replaceAllTasks(with tasks: [TaskDTO]) async throws {
         let context = ModelContext(container)
         context.autosaveEnabled = false
-        // Wipe existing tasks to ensure snapshot replacement is exact
         let existing = try context.fetch(FetchDescriptor<TaskItem>())
-        for item in existing { context.delete(item) }
+        var existingByID: [String: TaskItem] = [:]
+        for item in existing { existingByID[item.serverID] = item }
+
+        let incomingIDs = Set(tasks.map { $0.id })
+
+        for dto in tasks {
+            if let current = existingByID[dto.id] {
+                current.title = dto.title
+                current.completed = dto.is_completed
+                current.dueAt = dto.due_at
+                current.updatedAt = dto.updated_at
+                // Map project fields distinctly
+                if let pid = dto.project { current.project = pid; current.projectId = pid }
+                if let pname = dto.project_name { current.projectName = pname }
+                if let area = dto.area { current.areaRaw = area.rawValue }
+            } else {
+                let item = TaskItem(
+                    serverID: dto.id,
+                    title: dto.title,
+                    completed: dto.is_completed,
+                    updatedAt: dto.updated_at,
+                    dueAt: dto.due_at,
+                    project: dto.project,
+                    projectId: dto.project,
+                    projectName: dto.project_name,
+                    areaRaw: dto.area?.rawValue
+                )
+                context.insert(item)
+            }
+        }
+
+        for item in existing where !incomingIDs.contains(item.serverID) {
+            context.delete(item)
+        }
+
         try context.save()
-        try await importTasks(tasks)
     }
 
     private func importTasks(_ tasks: [TaskDTO]) async throws {
@@ -105,9 +137,23 @@ actor SyncEngine {
                     existing.completed = dto.is_completed
                     existing.dueAt = dto.due_at
                     existing.updatedAt = dto.updated_at
-                    existing.project = dto.project
+                    // Map project fields distinctly
+                    existing.project = dto.project // legacy
+                    existing.projectId = dto.project
+                    if let name = dto.project_name { existing.projectName = name }
+                    existing.areaRaw = dto.area?.rawValue
                 } else {
-                    let item = TaskItem(serverID: dto.id, title: dto.title, completed: dto.is_completed, updatedAt: dto.updated_at, dueAt: dto.due_at, project: dto.project)
+                    let item = TaskItem(
+                        serverID: dto.id,
+                        title: dto.title,
+                        completed: dto.is_completed,
+                        updatedAt: dto.updated_at,
+                        dueAt: dto.due_at,
+                        project: dto.project,
+                        projectId: dto.project,
+                        projectName: dto.project_name,
+                        areaRaw: dto.area?.rawValue
+                    )
                     context.insert(item)
                 }
             }
@@ -164,12 +210,16 @@ actor SyncEngine {
                 var dueAt: Date? = nil
                 var updatedAt: Date = e.occurred_at
                 var project: String? = nil
+                var projectName: String? = nil
+                var areaValue: String? = nil
 
                 if let v = summary["title"], case let MobileDeltaJSONValue.string(t) = v { title = t }
                 if let v = summary["is_completed"], case let MobileDeltaJSONValue.bool(b) = v { isCompleted = b }
                 if let v = summary["due_at"], case let MobileDeltaJSONValue.string(s) = v { dueAt = parseISO8601(s) }
                 if let v = summary["updated_at"], case let MobileDeltaJSONValue.string(s) = v, let d = parseISO8601(s) { updatedAt = d }
                 if let v = summary["project"], case let MobileDeltaJSONValue.string(p) = v { project = p }
+                if let v = summary["project_name"], case let MobileDeltaJSONValue.string(n) = v { projectName = n }
+                if let v = summary["area"], case let MobileDeltaJSONValue.string(a) = v { areaValue = a.lowercased() }
 
                 print("[Import] Event type=\(e.event_type) serverID=\(serverID) tombstone=\(e.tombstone) title=\(title ?? "<nil>")")
 
@@ -188,9 +238,11 @@ actor SyncEngine {
                     existing.completed = isCompleted
                     existing.dueAt = dueAt
                     existing.updatedAt = updatedAt
-                    if let p = project { existing.project = p }
+                    if let p = project { existing.project = p; existing.projectId = p }
+                    if let n = projectName { existing.projectName = n }
+                    if let a = areaValue { existing.areaRaw = a }
                 } else {
-                    let newItem = TaskItem(serverID: serverID, title: title ?? "Untitled", completed: isCompleted, updatedAt: updatedAt, dueAt: dueAt, project: project)
+                    let newItem = TaskItem(serverID: serverID, title: title ?? "Untitled", completed: isCompleted, updatedAt: updatedAt, dueAt: dueAt, project: project, projectId: project, projectName: projectName, areaRaw: areaValue)
                     context.insert(newItem)
                     all.append(newItem)
                 }
@@ -245,6 +297,7 @@ actor SyncEngine {
         let due_at: Date?
         let updated_at: Date
         let project: String?
+        let project_name: String?
         let area: TaskArea?
         let priority: Int?
         let recurrence: RepeatRule?

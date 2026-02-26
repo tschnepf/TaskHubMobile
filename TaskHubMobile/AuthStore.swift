@@ -239,19 +239,20 @@ final class AuthStore: NSObject, ObservableObject {
 extension AuthStore: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if canImport(UIKit)
-        if let scene = UIApplication.shared.connectedScenes
+        if let window = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
-            .first {
-            if let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
-                return window
-            }
-            // Fallback: attach to a new window for this scene (non-deprecated initializer)
-            let temp = UIWindow(windowScene: scene)
-            return temp
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) {
+            return window
         }
-        return ASPresentationAnchor()
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            let window = UIWindow(windowScene: scene)
+            window.isHidden = false
+            return window
+        }
+        fatalError("No active UIWindowScene available to present web authentication session.")
         #else
-        return ASPresentationAnchor()
+        fatalError("Unsupported platform: missing UIKit for web authentication presentation anchor.")
         #endif
     }
 }

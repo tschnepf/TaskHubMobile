@@ -17,16 +17,12 @@ actor LocalProjectCache {
     private let defaults: UserDefaults
     private let storageKey = "project.names"
 
-    init(suiteName: String? = AppIdentifiers.appGroupID) {
+    init(suiteName: String? = nil) {
         if let suiteName, let suite = UserDefaults(suiteName: suiteName) {
             self.defaults = suite
         } else {
             self.defaults = .standard
         }
-        load()
-    }
-
-    private func load() {
         if let arr = defaults.array(forKey: storageKey) as? [String] {
             self.names = arr
         } else {
@@ -92,7 +88,7 @@ final class SyncController: ObservableObject {
             return APIClient(baseURLProvider: { base }, authStore: self!.authStore)
         })
     }()
-    private let projectCache = LocalProjectCache(suiteName: AppIdentifiers.appGroupID)
+    private let projectCache = LocalProjectCache(suiteName: nil)
     
     private var liveLoopTask: Task<Void, Never>? = nil
     private var authTokenCancellable: AnyCancellable? = nil
@@ -198,6 +194,7 @@ final class SyncController: ObservableObject {
                     self.nextAllowedSync = nil
                     Task { await self.widgetCache.refreshSnapshotIfNeeded(); WidgetCenter.shared.reloadAllTimelines() }
                     Task { await self.refreshProjectsCache() }
+                    Task { await self.backfillMissingAreas(limit: 50) }
                 }
             } catch {
                 if case APIClientError.unauthorized = error {
@@ -282,6 +279,39 @@ final class SyncController: ObservableObject {
         }
     }
     
+    private func backfillMissingAreas(limit: Int = 50) async {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        do {
+            var descriptor = FetchDescriptor<TaskItem>(
+                predicate: #Predicate { $0.areaRaw == nil || $0.areaRaw == "" },
+                sortBy: [SortDescriptor(\TaskItem.updatedAt, order: .reverse)]
+            )
+            descriptor.fetchLimit = limit
+            let missing: [TaskItem] = try context.fetch(descriptor)
+            guard !missing.isEmpty else { return }
+            guard let base = appConfig.baseURL else { return }
+            let client = APIClient(baseURLProvider: { base }, authStore: authStore)
+            for item in missing {
+                do {
+                    let detail = try await client.getTaskDetail(id: item.serverID)
+                    if let area = detail.area {
+                        switch area {
+                        case .personal: item.areaRaw = "personal"
+                        case .work: item.areaRaw = "work"
+                        case .unknown(let s): item.areaRaw = s.lowercased()
+                        }
+                        try? context.save()
+                    }
+                } catch {
+                    // Ignore individual failures and continue
+                }
+            }
+        } catch {
+            // Ignore fetch failures
+        }
+    }
+    
     deinit {
         liveLoopTask?.cancel()
         authTokenCancellable?.cancel()
@@ -289,3 +319,4 @@ final class SyncController: ObservableObject {
 }
 
 extension SyncController: Syncing {}
+

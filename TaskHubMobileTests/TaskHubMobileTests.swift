@@ -58,4 +58,34 @@ struct MobileTaskDecodingTests {
         #expect(env.error.code == "bad_request")
         #expect(env.request_id == "r123")
     }
+
+    @Test("Decode summary with project and project_name")
+    func decodeSummaryProjectFields() async throws {
+        let json = """
+        [{
+          "id":"1","title":"A","is_completed":false,
+          "due_at":"2026-02-24T22:04:50Z","updated_at":"2026-02-24T22:04:50Z",
+          "project":"abc-uuid","project_name":"ADC"
+        }]
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder.mobileRFC3339()
+        let arr = try decoder.decode([MobileTaskSummaryDTO].self, from: json)
+        #expect(arr.first?.projectId == "abc-uuid")
+        #expect(arr.first?.projectName == "ADC")
+    }
+
+    @Test("Decode detail with project and project_name")
+    func decodeDetailProjectFields() async throws {
+        let json = """
+        {
+          "id":"1","title":"A","is_completed":false,
+          "due_at":"2026-02-24T22:04:50Z","updated_at":"2026-02-24T22:04:50Z",
+          "project":"abc-uuid","project_name":"ADC"
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder.mobileRFC3339()
+        let item = try decoder.decode(MobileTaskDetailDTO.self, from: json)
+        #expect(item.projectId == "abc-uuid")
+        #expect(item.projectName == "ADC")
+    }
 }

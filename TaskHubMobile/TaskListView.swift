@@ -8,11 +8,19 @@
 import SwiftUI
 import SwiftData
 
+enum TaskListScope: Hashable {
+    case all
+    case work
+    case personal
+}
+
 struct TaskListView: View {
-    @Query(sort: \TaskItem.updatedAt, order: .reverse) private var tasks: [TaskItem]
+    let scope: TaskListScope
+    @Query private var tasks: [TaskItem]
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var appConfig: AppConfig
     @EnvironmentObject private var authStore: AuthStore
+    @EnvironmentObject private var syncController: SyncController
     @State private var editTaskID: String? = nil
     @State private var editTitle: String = ""
     @State private var expandedTaskID: String? = nil
@@ -24,12 +32,42 @@ struct TaskListView: View {
     @State private var editProjectName: String = ""
     @State private var errorMessage: String? = nil
     @State private var isSaving: Bool = false
+    
+    @State private var editDirty: Bool = false
+    @State private var editCancelled: Bool = false
+
+    init(scope: TaskListScope = .all) {
+        self.scope = scope
+        let sort = [SortDescriptor(\TaskItem.updatedAt, order: .reverse)]
+        _tasks = Query(sort: sort)
+    }
+
+    private var displayedTasks: [TaskItem] {
+        switch scope {
+        case .all:
+            return tasks
+        case .work:
+            let explicit = tasks.filter { $0.areaRaw == "work" }
+            let fallback = tasks.filter { ($0.areaRaw == nil || $0.areaRaw == "") && (($0.projectId != nil) || ((($0.projectName) ?? "").isEmpty == false)) }
+            var map: [String: TaskItem] = [:]
+            for t in explicit { map[t.serverID] = t }
+            for t in fallback { map[t.serverID] = t }
+            return map.values.sorted(by: { $0.updatedAt > $1.updatedAt })
+        case .personal:
+            let explicit = tasks.filter { $0.areaRaw == "personal" }
+            let fallback = tasks.filter { ($0.areaRaw == nil || $0.areaRaw == "") && ($0.projectId == nil) && ((($0.projectName) ?? "").isEmpty) }
+            var map: [String: TaskItem] = [:]
+            for t in explicit { map[t.serverID] = t }
+            for t in fallback { map[t.serverID] = t }
+            return map.values.sorted(by: { $0.updatedAt > $1.updatedAt })
+        }
+    }
 
     var body: some View {
-        if tasks.isEmpty {
+        if displayedTasks.isEmpty {
             ContentUnavailableView("No Tasks", systemImage: "checklist", description: Text("Your tasks will appear here automatically."))
         } else {
-            List(tasks) { task in
+            List(displayedTasks) { task in
                 HStack(alignment: .center, spacing: 0) {
                     // Compact completion button
                     Button {
@@ -47,10 +85,10 @@ struct TaskListView: View {
 
                     // Right side opens inline editor
                     Button {
-                        startEdit(task)
+                        Task { await startEdit(task) }
                     } label: {
                         VStack(alignment: .leading) {
-                            if let name = task.project, !name.isEmpty {
+                            if let name = task.projectName, !name.isEmpty {
                                 Text("\(name) \(task.title)")
                             } else {
                                 Text(task.title)
@@ -122,6 +160,7 @@ struct TaskListView: View {
 
                         HStack {
                             Button("Cancel") {
+                                editCancelled = true
                                 withAnimation { expandedTaskID = nil }
                             }
                             Spacer()
@@ -138,9 +177,23 @@ struct TaskListView: View {
                         }
                     }
                     .padding(.vertical, 8)
+                    .onChange(of: editTitle) { _, _ in editDirty = true }
+                    .onChange(of: editHasDueDate) { _, _ in editDirty = true }
+                    .onChange(of: editDueDate) { _, _ in editDirty = true }
+                    .onChange(of: editArea) { _, _ in editDirty = true }
+                    .onChange(of: editPriority) { _, _ in editDirty = true }
+                    .onChange(of: editRepeat) { _, _ in editDirty = true }
+                    .onChange(of: editProjectName) { _, _ in editDirty = true }
                 }
             }
             .listStyle(.plain)
+            .refreshable { syncController.syncNow() }
+            .onChange(of: expandedTaskID) { _, newValue in
+                if newValue == nil, editDirty, !editCancelled {
+                    Task { await saveEdits() }
+                }
+                if newValue == nil { editCancelled = false }
+            }
             .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -149,20 +202,22 @@ struct TaskListView: View {
         }
     }
 
-    private func startEdit(_ task: TaskItem) {
+    private func startEdit(_ task: TaskItem) async {
         if expandedTaskID == task.serverID {
             withAnimation { expandedTaskID = nil }
-            editTaskID = nil
             return
+        }
+        if let current = expandedTaskID, current != task.serverID, editDirty {
+            await saveEdits()
         }
         editTaskID = task.serverID
         editTitle = task.title
         if let due = task.dueAt { editDueDate = due; editHasDueDate = true } else { editHasDueDate = false }
-        editArea = .personal
-        editPriority = .three
-        editRepeat = .none
-        editProjectName = ""
+        editProjectName = task.projectName ?? ""
+        // Reset or keep other edit fields as needed
         withAnimation { expandedTaskID = task.serverID }
+        editDirty = false
+        editCancelled = false
     }
 
     @MainActor
@@ -189,9 +244,12 @@ struct TaskListView: View {
                 item.title = editTitle
                 item.dueAt = due
                 item.project = editProjectName.isEmpty ? nil : editProjectName
+                item.projectName = editProjectName.isEmpty ? nil : editProjectName
+                item.areaRaw = editArea.rawValue
                 item.updatedAt = Date()
                 try? modelContext.save()
             }
+            editDirty = false
             withAnimation { expandedTaskID = nil }
             editTaskID = nil
             print("[Edit] Save completed for id=\(id)")
@@ -217,3 +275,4 @@ struct TaskListView: View {
     TaskListView()
         .modelContainer(for: TaskItem.self, inMemory: true)
 }
+
