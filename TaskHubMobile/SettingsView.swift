@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var isSigningOut = false
     @State private var signInErrorMessage: String?
     @State private var isPresentingSignInError = false
+    @AppStorage("ui.taskDensity") private var taskDensityRaw = TaskDensity.expanded.rawValue
 
     private var appConfig: AppConfig { env.appConfig }
     private var authStore: AuthStore { env.authStore }
@@ -65,6 +66,15 @@ struct SettingsView: View {
                     }
                     .disabled(isSigningIn || appConfig.baseURL == nil)
                 }
+            }
+
+            Section("Appearance") {
+                Picker("Task Density", selection: $taskDensityRaw) {
+                    ForEach(TaskDensity.allCases) { density in
+                        Text(density.title).tag(density.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
 
             Section("Tools") {

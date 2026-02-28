@@ -10,6 +10,11 @@ import AuthenticationServices
 import Combine
 import UIKit
 
+private struct OAuthErrorResponse: Decodable {
+    let error: String?
+    let error_description: String?
+}
+
 private enum AuthFlowError: LocalizedError {
     case noActivePresentationAnchor
     case unsupportedPlatform
@@ -94,7 +99,7 @@ final class AuthStore: NSObject, ObservableObject {
             cacheMeta(fetched, for: canonicalBaseURL)
             meta = fetched
         } catch {
-            if let cached = loadCachedMeta(for: canonicalBaseURL) {
+            if shouldFallbackToCachedMeta(after: error), let cached = loadCachedMeta(for: canonicalBaseURL) {
                 meta = cached
             } else {
                 throw error
@@ -164,8 +169,20 @@ final class AuthStore: NSObject, ObservableObject {
     private func fetchDiscovery(from url: URL) async throws -> OIDCDiscovery {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+        guard let http = resp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw badServerResponseError(
+                context: "OIDC discovery request failed",
+                url: url,
+                statusCode: http.statusCode,
+                body: data
+            )
+        }
         let decoder = JSONDecoder()
         return try decoder.decode(OIDCDiscovery.self, from: data)
     }
@@ -173,7 +190,9 @@ final class AuthStore: NSObject, ObservableObject {
     private func exchangeCodeForToken(discovery: OIDCDiscovery, clientID: String, code: String, verifier: String) async throws -> TokenResponse {
         var req = URLRequest(url: discovery.token_endpoint)
         req.httpMethod = "POST"
+        req.timeoutInterval = 20
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         let bodyItems: [URLQueryItem] = [
             URLQueryItem(name: "grant_type", value: "authorization_code"),
             URLQueryItem(name: "code", value: code),
@@ -183,7 +202,26 @@ final class AuthStore: NSObject, ObservableObject {
         ]
         req.httpBody = Self.formURLEncoded(bodyItems).data(using: .utf8)
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+        guard let http = resp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200...299).contains(http.statusCode) else {
+            if let oauthError = try? JSONDecoder().decode(OAuthErrorResponse.self, from: data) {
+                let detail = oauthError.error_description ?? oauthError.error ?? "Unknown OAuth token error."
+                let userInfo: [String: Any] = [
+                    NSLocalizedDescriptionKey: "Token exchange failed (HTTP \(http.statusCode)): \(detail)",
+                    "http.status": http.statusCode,
+                    "url": discovery.token_endpoint.absoluteString
+                ]
+                throw NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse, userInfo: userInfo)
+            }
+            throw badServerResponseError(
+                context: "Token exchange failed",
+                url: discovery.token_endpoint,
+                statusCode: http.statusCode,
+                body: data
+            )
+        }
         let decoder = JSONDecoder()
         return try decoder.decode(TokenResponse.self, from: data)
     }
@@ -284,6 +322,34 @@ final class AuthStore: NSObject, ObservableObject {
         return components.percentEncodedQuery ?? ""
     }
 
+    private func shouldFallbackToCachedMeta(after error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.userInfo["http.status"] != nil {
+            return false
+        }
+        guard nsError.domain == NSURLErrorDomain else {
+            return false
+        }
+        let code = URLError.Code(rawValue: nsError.code)
+        switch code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func badServerResponseError(context: String, url: URL, statusCode: Int, body: Data) -> NSError {
+        let preview = String(data: body, encoding: .utf8).map { String($0.prefix(300)) } ?? "<non-utf8>"
+        let userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: "\(context): HTTP \(statusCode). Body prefix: \(preview)",
+            "http.status": statusCode,
+            "body.preview": preview,
+            "url": url.absoluteString
+        ]
+        return NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse, userInfo: userInfo)
+    }
+
     private func metaCacheKey(for baseURL: URL) -> String {
         let canonical = ServerBootstrap.canonicalBaseURL(baseURL) ?? baseURL
         return metaCacheKeyPrefix + canonical.absoluteString
@@ -314,7 +380,7 @@ extension AuthStore: ASWebAuthenticationPresentationContextProviding {
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             return ASPresentationAnchor(windowScene: scene)
         }
-        return ASPresentationAnchor()
+        preconditionFailure("ASWebAuthenticationSession requires an active UIWindowScene for presentation.")
         #else
         return ASPresentationAnchor()
         #endif

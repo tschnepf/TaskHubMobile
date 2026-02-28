@@ -8,5 +8,7 @@
 	<array>
 		<string>group.com.ie.taskhub</string>
 	</array>
+	<key>com.apple.developer.siri</key>
+	<true/>
 </dict>
 </plist>

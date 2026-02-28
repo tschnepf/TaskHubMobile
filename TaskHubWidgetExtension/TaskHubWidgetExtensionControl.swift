@@ -1,77 +1,17 @@
-//
-//  TaskHubWidgetExtensionControl.swift
-//  TaskHubWidgetExtension
-//
-//  Created by tim on 2/26/26.
-//
-
 import AppIntents
 import SwiftUI
 import WidgetKit
 
 struct TaskHubWidgetExtensionControl: ControlWidget {
-    static let kind: String = "com.ie.TaskHubMobile.TaskHubWidgetExtension"
+    static let kind: String = taskHubControlWidgetKind
 
     var body: some ControlWidgetConfiguration {
-        AppIntentControlConfiguration(
-            kind: Self.kind,
-            provider: Provider()
-        ) { value in
-            ControlWidgetToggle(
-                "Start Timer",
-                isOn: value.isRunning,
-                action: StartTimerIntent(value.name)
-            ) { isRunning in
-                Label(isRunning ? "On" : "Off", systemImage: "timer")
+        AppIntentControlConfiguration(kind: Self.kind, intent: TaskControlConfigurationIntent.self) { configuration in
+            ControlWidgetButton(action: OpenTaskHubRouteIntent(action: configuration.action)) {
+                Label(configuration.action.title, systemImage: configuration.action.systemImage)
             }
         }
-        .displayName("Timer")
-        .description("A an example control that runs a timer.")
-    }
-}
-
-extension TaskHubWidgetExtensionControl {
-    struct Value {
-        var isRunning: Bool
-        var name: String
-    }
-
-    struct Provider: AppIntentControlValueProvider {
-        func previewValue(configuration: TimerConfiguration) -> Value {
-            TaskHubWidgetExtensionControl.Value(isRunning: false, name: configuration.timerName)
-        }
-
-        func currentValue(configuration: TimerConfiguration) async throws -> Value {
-            let isRunning = true // Check if the timer is running
-            return TaskHubWidgetExtensionControl.Value(isRunning: isRunning, name: configuration.timerName)
-        }
-    }
-}
-
-struct TimerConfiguration: ControlConfigurationIntent {
-    static let title: LocalizedStringResource = "Timer Name Configuration"
-
-    @Parameter(title: "Timer Name", default: "Timer")
-    var timerName: String
-}
-
-struct StartTimerIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Start a timer"
-
-    @Parameter(title: "Timer Name")
-    var name: String
-
-    @Parameter(title: "Timer is running")
-    var value: Bool
-
-    init() {}
-
-    init(_ name: String) {
-        self.name = name
-    }
-
-    func perform() async throws -> some IntentResult {
-        // Start the timer…
-        return .result()
+        .displayName("TaskHub Shortcut")
+        .description("Open Quick Add or jump directly to task lists.")
     }
 }

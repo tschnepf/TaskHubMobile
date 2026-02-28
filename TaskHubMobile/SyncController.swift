@@ -82,13 +82,7 @@ final class SyncController: ObservableObject {
     private var lastBackfillAt: Date?
     private let backfillMinimumInterval: TimeInterval = 15 * 60
 
-    private lazy var widgetCache: WidgetCache = {
-        let appConfig = self.appConfig
-        let authStore = self.authStore
-        return WidgetCache(appGroupID: AppIdentifiers.appGroupID, apiClientProvider: {
-            APIClient(baseURLProvider: { appConfig.baseURL }, authStore: authStore)
-        })
-    }()
+    private lazy var liveActivityCoordinator = LiveActivityCoordinator(modelContainer: container)
     private let projectCache = LocalProjectCache(suiteName: nil)
 
     private var liveLoopTask: Task<Void, Never>? = nil
@@ -220,7 +214,10 @@ final class SyncController: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
-                await MainActor.run { self.isSyncing = true }
+                await MainActor.run {
+                    self.isSyncing = true
+                    self.refreshLiveActivity(syncState: .syncing)
+                }
                 try await engine.performInitialOrDeltaSync()
                 await MainActor.run {
                     self.isSyncing = false
@@ -256,6 +253,7 @@ final class SyncController: ObservableObject {
                     }
                     let elapsed = Int(Date().timeIntervalSince(started) * 1000)
                     os_log("[Sync] Failure source=%{public}@ duration_ms=%{public}d", source.rawValue, elapsed)
+                    self.refreshLiveActivity(syncState: .retrying)
                 }
             }
         }
@@ -263,8 +261,8 @@ final class SyncController: ObservableObject {
 
     private func runPostSyncSideEffects() {
         writeWidgetSnapshotFromStore()
-        Task { await widgetCache.refreshSnapshotIfNeeded() }
-        WidgetCenter.shared.reloadAllTimelines()
+        reloadWidgetTimelines()
+        refreshLiveActivity(syncState: .upToDate)
         Task { await refreshProjectsCache() }
         if shouldRunBackfill() {
             Task { await backfillMissingAreas(limit: 20) }
@@ -291,6 +289,7 @@ final class SyncController: ObservableObject {
             context.insert(item)
             try context.save()
             lastError = nil
+            refreshWidgetAndLiveAfterMutation()
             return
         }
 
@@ -307,6 +306,7 @@ final class SyncController: ObservableObject {
                 self.lastError = nil
                 let elapsed = Int(Date().timeIntervalSince(started) * 1000)
                 os_log("[CreateTask] Success duration_ms=%{public}d", elapsed)
+                self.refreshWidgetAndLiveAfterMutation()
             }
             triggerImmediateDelta(source: .reconcile)
         } catch {
@@ -336,7 +336,22 @@ final class SyncController: ObservableObject {
 
     func refreshWidgetSnapshot() {
         writeWidgetSnapshotFromStore()
-        WidgetCenter.shared.reloadAllTimelines()
+        reloadWidgetTimelines()
+        refreshLiveActivity(syncState: .upToDate)
+    }
+
+    private func reloadWidgetTimelines() {
+        WidgetCenter.shared.reloadTimelines(ofKind: taskHubHomeWidgetKind)
+    }
+
+    private func refreshLiveActivity(syncState: TaskHubLiveSyncState) {
+        liveActivityCoordinator.refresh(syncState: syncState)
+    }
+
+    private func refreshWidgetAndLiveAfterMutation() {
+        writeWidgetSnapshotFromStore()
+        reloadWidgetTimelines()
+        refreshLiveActivity(syncState: .upToDate)
     }
 
     func setTaskCompleted(taskID: String, completed: Bool, triggerReconcile: Bool = false) async throws -> TaskCompletionMutationResult {
@@ -353,6 +368,7 @@ final class SyncController: ObservableObject {
                 item.updatedAt = Date()
                 try context.save()
             }
+            refreshWidgetAndLiveAfterMutation()
             let elapsed = Int(Date().timeIntervalSince(started) * 1000)
             return TaskCompletionMutationResult(taskID: taskID, completed: completed, updatedAt: Date(), elapsedMs: elapsed)
         }
@@ -377,6 +393,7 @@ final class SyncController: ObservableObject {
         if triggerReconcile {
             syncNow(source: .reconcile)
         }
+        refreshWidgetAndLiveAfterMutation()
 
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         os_log("[ToggleTask] task=%{public}@ completed=%{public}@ duration_ms=%{public}d", taskID, completed.description, elapsed)
@@ -396,6 +413,7 @@ final class SyncController: ObservableObject {
                 try context.save()
             }
             lastError = nil
+            refreshWidgetAndLiveAfterMutation()
             return
         }
 
@@ -416,6 +434,111 @@ final class SyncController: ObservableObject {
             try context.save()
         }
         lastError = nil
+        refreshWidgetAndLiveAfterMutation()
+    }
+
+    func setTaskDueDate(taskID: String, dueAt: Date) async throws {
+        let normalizedDueAt = Calendar.current.startOfDay(for: dueAt)
+
+        if uiTestModeEnabled && uiTestStubMutationsEnabled {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            if let item = all.first(where: { $0.serverID == taskID }) {
+                item.dueAt = normalizedDueAt
+                item.updatedAt = Date()
+                try context.save()
+            }
+            lastError = nil
+            refreshWidgetAndLiveAfterMutation()
+            return
+        }
+
+        guard let base = appConfig.baseURL else {
+            throw APIClientError.missingBaseURL
+        }
+
+        let client = APIClient(baseURLProvider: { base }, authStore: authStore)
+        let updated = try await client.updateTask(id: taskID, title: nil, completed: nil, dueAt: normalizedDueAt)
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        if let item = all.first(where: { $0.serverID == taskID }) {
+            apply(detail: updated, to: item)
+            try context.save()
+        }
+        lastError = nil
+        refreshWidgetAndLiveAfterMutation()
+    }
+
+    func updateTask(
+        taskID: String,
+        title: String,
+        area: TaskArea,
+        priority: TaskPriority?,
+        projectName: String?,
+        dueAt: Date?,
+        repeatRule: RepeatRule
+    ) async throws {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTitle.isEmpty else {
+            throw NSError(domain: "TaskEdit", code: -1, userInfo: [NSLocalizedDescriptionKey: "Task title is required."])
+        }
+
+        let normalizedProjectName: String? = {
+            guard let projectName else { return nil }
+            let trimmed = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+        let normalizedDueAt = dueAt.map { Calendar.current.startOfDay(for: $0) }
+
+        if uiTestModeEnabled && uiTestStubMutationsEnabled {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            if let item = all.first(where: { $0.serverID == taskID }) {
+                item.title = normalizedTitle
+                item.areaRaw = area.rawValue
+                item.priority = priority?.rawValue
+                item.project = normalizedProjectName
+                item.projectName = normalizedProjectName
+                item.dueAt = normalizedDueAt ?? item.dueAt
+                item.recurrenceRaw = repeatRule.rawValue
+                item.updatedAt = Date()
+                try context.save()
+            }
+            lastError = nil
+            refreshWidgetAndLiveAfterMutation()
+            return
+        }
+
+        guard let base = appConfig.baseURL else {
+            throw APIClientError.missingBaseURL
+        }
+
+        let client = APIClient(baseURLProvider: { base }, authStore: authStore)
+        let updated = try await client.updateTask(
+            id: taskID,
+            title: normalizedTitle,
+            completed: nil,
+            dueAt: normalizedDueAt,
+            projectName: normalizedProjectName,
+            area: area,
+            priority: priority,
+            repeatRule: repeatRule
+        )
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        if let item = all.first(where: { $0.serverID == taskID }) {
+            apply(detail: updated, to: item)
+            try context.save()
+        }
+        lastError = nil
+        refreshWidgetAndLiveAfterMutation()
+        Task { await refreshProjectsCache() }
     }
 
     private func apply(detail: MobileTaskDetailDTO, to item: TaskItem) {
@@ -483,31 +606,73 @@ final class SyncController: ObservableObject {
         return dir.appendingPathComponent("widget_tasks.json")
     }
 
-    private func writeWidgetSnapshotFromStore(limit: Int = 7) {
+    private func writeWidgetSnapshotFromStore(limit: Int = 40) {
         let context = ModelContext(container)
         context.autosaveEnabled = false
         do {
             var descriptor = FetchDescriptor<TaskItem>(
                 sortBy: [
                     SortDescriptor(\TaskItem.dueAt, order: .forward),
-                    SortDescriptor(\TaskItem.title, order: .forward)
+                    SortDescriptor(\TaskItem.updatedAt, order: .reverse)
                 ]
             )
             descriptor.fetchLimit = limit
-            let items = try context.fetch(descriptor)
+            let items: [TaskItem] = try context.fetch(descriptor)
             struct OutItem: Codable {
-                enum CodingKeys: String, CodingKey { case title, isCompleted = "is_completed", dueAt = "due_at" }
+                enum CodingKeys: String, CodingKey {
+                    case id
+                    case title
+                    case isCompleted = "is_completed"
+                    case dueAt = "due_at"
+                    case area
+                    case projectName = "project_name"
+                    case priority
+                    case updatedAt = "updated_at"
+                }
+                let id: String
                 let title: String
                 let isCompleted: Bool
                 let dueAt: Date?
+                let area: String?
+                let projectName: String?
+                let priority: Int?
+                let updatedAt: Date
             }
-            struct OutSnapshot: Codable { let count: Int; let tasks: [OutItem] }
-            let mapped = items.map { OutItem(title: $0.title, isCompleted: $0.completed, dueAt: $0.dueAt) }
-            let snapshot = OutSnapshot(count: mapped.count, tasks: mapped)
+            struct OutSnapshot: Codable {
+                enum CodingKeys: String, CodingKey {
+                    case version
+                    case generatedAt = "generated_at"
+                    case count
+                    case tasks
+                }
+                let version: Int
+                let generatedAt: Date
+                let count: Int
+                let tasks: [OutItem]
+            }
+            let mapped = items.map {
+                OutItem(
+                    id: $0.serverID,
+                    title: $0.title,
+                    isCompleted: $0.completed,
+                    dueAt: $0.dueAt,
+                    area: $0.areaRaw,
+                    projectName: $0.projectName ?? $0.project,
+                    priority: $0.priority,
+                    updatedAt: $0.updatedAt
+                )
+            }
+            let incompleteCount = mapped.filter { !$0.isCompleted }.count
+            let snapshot = OutSnapshot(
+                version: 2,
+                generatedAt: Date(),
+                count: incompleteCount,
+                tasks: mapped
+            )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             guard let url = widgetSnapshotURL(), let data = try? encoder.encode(snapshot) else { return }
-            try? data.write(to: url, options: [.atomic])
+            try? data.write(to: url, options: Data.WritingOptions.atomic)
         } catch {
             // Ignore snapshot write errors; widget will show placeholder or empty state
         }

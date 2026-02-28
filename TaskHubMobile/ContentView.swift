@@ -4,6 +4,11 @@ import SwiftData
 struct ContentView: View {
     @EnvironmentObject private var env: DefaultAppEnvironment
     @StateObject private var viewModel = TaskHomeViewModel()
+    @AppStorage("ui.taskDensity") private var taskDensityRaw = TaskDensity.expanded.rawValue
+
+    private var taskDensity: TaskDensity {
+        TaskDensity(rawValue: taskDensityRaw) ?? .expanded
+    }
 
     var body: some View {
         NavigationStack {
@@ -15,23 +20,23 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
 
-                VStack(spacing: DS.Spacing.sm) {
+                VStack(spacing: taskDensity == .compact ? DS.Spacing.xxs : DS.Spacing.xs) {
                     header
-                        .padding(.horizontal, DS.Spacing.md)
-                        .padding(.top, DS.Spacing.xs)
+                        .padding(.horizontal, taskDensity == .compact ? DS.Spacing.sm : DS.Spacing.md)
+                        .padding(.top, taskDensity == .compact ? 2 : DS.Spacing.xxs)
 
                     if env.isOfflineForDisplay {
                         offlineBanner
-                            .padding(.horizontal, DS.Spacing.md)
+                            .padding(.horizontal, taskDensity == .compact ? DS.Spacing.sm : DS.Spacing.md)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                    FilterChipBar(selected: viewModel.selectedScope) { scope in
+                    FilterChipBar(selected: viewModel.selectedScope, density: taskDensity) { scope in
                         viewModel.setScope(scope)
                     }
-                    .padding(.horizontal, DS.Spacing.md)
+                    .padding(.horizontal, taskDensity == .compact ? DS.Spacing.sm : DS.Spacing.md)
 
-                    TaskListView(scope: viewModel.selectedScope) { message, style in
+                    TaskListView(scope: viewModel.selectedScope, density: taskDensity) { message, style in
                         viewModel.showToast(message, style: style)
                     }
                     .environmentObject(env)
@@ -48,37 +53,7 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        env.syncController.syncNow(source: .manual)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .accessibilityLabel("Sync now")
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        viewModel.isPresentingQuickAdd = true
-                    } label: {
-                        Label("Quick Add", systemImage: "plus.circle.fill")
-                            .labelStyle(.iconOnly)
-                    }
-                    .accessibilityLabel("Quick Add")
-                    .accessibilityIdentifier("home.quickadd")
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(isPresented: $viewModel.isPresentingQuickAdd) {
             QuickAddSheet(
@@ -91,14 +66,20 @@ struct ContentView: View {
             )
             .environmentObject(env)
         }
+        .onAppear {
+            applyPendingDeepLinkIfNeeded()
+        }
+        .onChange(of: env.pendingDeepLink) { _, _ in
+            applyPendingDeepLinkIfNeeded()
+        }
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+        HStack(spacing: taskDensity == .compact ? DS.Spacing.xs : DS.Spacing.sm) {
+            VStack(alignment: .leading, spacing: taskDensity == .compact ? 2 : DS.Spacing.xxs) {
                 Text("Task Hub")
-                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                SyncStatusPill()
+                    .font(.system(taskDensity == .compact ? .title3 : .title2, design: .rounded).weight(.bold))
+                SyncStatusPill(density: taskDensity)
                     .environmentObject(env)
             }
 
@@ -114,9 +95,41 @@ struct ContentView: View {
                         }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: DS.Spacing.xs) {
+                Button {
+                    env.syncController.syncNow(source: .manual)
+                } label: {
+                    actionIcon("arrow.clockwise")
+                }
+                .accessibilityLabel("Sync now")
+
+                Button {
+                    viewModel.isPresentingQuickAdd = true
+                } label: {
+                    actionIcon("plus")
+                }
+                .accessibilityLabel("Quick Add")
+                .accessibilityIdentifier("home.quickadd")
+
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    actionIcon("gearshape")
+                }
+                .accessibilityLabel("Settings")
             }
         }
+    }
+
+    private func actionIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: taskDensity == .compact ? 13 : 14, weight: .semibold))
+            .frame(width: taskDensity == .compact ? 26 : 30, height: taskDensity == .compact ? 26 : 30)
+            .background(DS.Colors.surface)
+            .clipShape(Circle())
     }
 
     private var offlineBanner: some View {
@@ -132,12 +145,28 @@ struct ContentView: View {
             }
             .font(DS.Typography.caption)
         }
-        .padding(.vertical, DS.Spacing.xs)
+        .padding(.vertical, taskDensity == .compact ? DS.Spacing.xxs : DS.Spacing.xs)
         .padding(.horizontal, DS.Spacing.sm)
         .background(DS.Colors.warning.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.offlineBanner")
+    }
+
+    private func applyPendingDeepLinkIfNeeded() {
+        guard let action = env.consumePendingDeepLink() else { return }
+
+        switch action {
+        case .openTasks(let scope):
+            if let scope {
+                viewModel.setScope(scope)
+            }
+        case .openQuickAdd(let scope):
+            if let scope {
+                viewModel.setScope(scope)
+            }
+            viewModel.isPresentingQuickAdd = true
+        }
     }
 }
 

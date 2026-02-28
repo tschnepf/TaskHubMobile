@@ -15,6 +15,10 @@
 				</array>
 			</dict>
 		</array>
+		<key>NSSiriUsageDescription</key>
+		<string>Use Siri to create tasks in Task Hub.</string>
+		<key>NSSupportsLiveActivities</key>
+		<true/>
 		<key>UIBackgroundModes</key>
 		<array>
 			<string>remote-notification</string>

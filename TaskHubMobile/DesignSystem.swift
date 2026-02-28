@@ -1,5 +1,21 @@
 import SwiftUI
 
+enum TaskDensity: String, CaseIterable, Identifiable {
+    case expanded
+    case compact
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .expanded:
+            return "Expanded"
+        case .compact:
+            return "Compact"
+        }
+    }
+}
+
 enum DS {
     enum Spacing {
         static let xxs: CGFloat = 4

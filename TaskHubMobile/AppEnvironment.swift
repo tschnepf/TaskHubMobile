@@ -17,6 +17,11 @@ struct AppUXContext: Equatable {
     var message: String?
 }
 
+enum AppDeepLinkAction: Equatable {
+    case openTasks(scope: TaskListScope?)
+    case openQuickAdd(scope: TaskListScope?)
+}
+
 @MainActor
 final class DefaultAppEnvironment: ObservableObject {
     let objectWillChange = ObservableObjectPublisher()
@@ -31,6 +36,7 @@ final class DefaultAppEnvironment: ObservableObject {
 
     @Published private(set) var startupWarning: String?
     @Published private(set) var uxContext: AppUXContext = .init(state: .loading, message: nil)
+    @Published private(set) var pendingDeepLink: AppDeepLinkAction?
 
     private var onboardingRequired = false
     private var onboardingMessage = "Your identity needs to be linked by an administrator before you can sign in."
@@ -136,6 +142,47 @@ final class DefaultAppEnvironment: ObservableObject {
         lastSessionError = nil
         syncController.forceFullResync()
         Task { await refreshUXState(forceSessionCheck: false) }
+    }
+
+    func handleIncomingURL(_ url: URL) {
+        guard let action = Self.parseDeepLinkAction(from: url) else { return }
+        pendingDeepLink = action
+    }
+
+    func consumePendingDeepLink() -> AppDeepLinkAction? {
+        defer { pendingDeepLink = nil }
+        return pendingDeepLink
+    }
+
+    static func parseDeepLinkAction(from url: URL) -> AppDeepLinkAction? {
+        guard url.scheme?.lowercased() == "taskhubmobile" else { return nil }
+        guard url.host?.lowercased() == "open" else { return nil }
+
+        let path = url.path.lowercased()
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let scopeValue = components?.queryItems?.first(where: { $0.name.lowercased() == "scope" })?.value?.lowercased()
+
+        let parsedScope: TaskListScope? = {
+            switch scopeValue {
+            case "all":
+                return .all
+            case "work":
+                return .work
+            case "personal":
+                return .personal
+            default:
+                return nil
+            }
+        }()
+
+        switch path {
+        case "/tasks":
+            return .openTasks(scope: parsedScope)
+        case "/quickadd":
+            return .openQuickAdd(scope: parsedScope)
+        default:
+            return nil
+        }
     }
 
     func refreshUXState(forceSessionCheck: Bool = false) async {
@@ -446,10 +493,8 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
-            guard url.scheme?.lowercased() == "taskhubmobile" else { return }
-            let host = url.host?.lowercased()
-            let path = url.path.lowercased()
-            if host == "open" && path == "/tasks" {
+            if DefaultAppEnvironment.parseDeepLinkAction(from: url) != nil {
+                env.handleIncomingURL(url)
                 env.syncController.syncNow(source: .manual)
             }
         }

@@ -12,6 +12,9 @@ import SwiftUI
 struct TaskHubWidgetExtensionBundle: WidgetBundle {
     var body: some Widget {
         TaskHubWidgetExtension()
+#if DEBUG
+        TaskHubWidgetLegacyDebugExtension()
+#endif
         TaskHubWidgetExtensionControl()
         TaskHubWidgetExtensionLiveActivity()
     }

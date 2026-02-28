@@ -7,6 +7,7 @@ struct FilterChipBar: View {
     @Namespace private var namespace
 
     let selected: TaskListScope
+    let density: TaskDensity
     let onSelect: (TaskListScope) -> Void
 
     var body: some View {
@@ -20,8 +21,8 @@ struct FilterChipBar: View {
                     Text(scope.title)
                         .font(DS.Typography.caption)
                         .foregroundStyle(selected == scope ? Color.white : .primary)
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
+                        .padding(.vertical, density == .compact ? 6 : 8)
+                        .padding(.horizontal, density == .compact ? 10 : 12)
                         .frame(maxWidth: .infinity)
                         .background {
                             if selected == scope {
@@ -39,7 +40,7 @@ struct FilterChipBar: View {
                 .accessibilityIdentifier("filter.\(scope.title.lowercased())")
             }
         }
-        .padding(DS.Spacing.xs)
+        .padding(density == .compact ? DS.Spacing.xxs : DS.Spacing.xs)
         .background(DS.Colors.elevated)
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
         .overlay {
@@ -51,13 +52,14 @@ struct FilterChipBar: View {
 
 struct SyncStatusPill: View {
     @EnvironmentObject private var env: DefaultAppEnvironment
+    let density: TaskDensity
 
     var body: some View {
         let style = statusStyle
         Label(style.text, systemImage: style.symbol)
-            .font(DS.Typography.caption)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
+            .font(density == .compact ? .system(.caption2, design: .rounded).weight(.medium) : DS.Typography.caption)
+            .padding(.vertical, density == .compact ? 4 : 6)
+            .padding(.horizontal, density == .compact ? 8 : 10)
             .background(style.tint.opacity(0.12))
             .foregroundStyle(style.tint)
             .clipShape(Capsule())
