@@ -11,6 +11,7 @@ import SwiftUI
 
 /// Central app configuration and shared state.
 /// Stores the Task Hub base URL in a location that can be shared with extensions when App Group is configured.
+@MainActor
 final class AppConfig: ObservableObject {
     @Published var baseURL: URL?
 
@@ -28,8 +29,13 @@ final class AppConfig: ObservableObject {
         } else {
             self.defaults = .standard
         }
-        if let urlString = defaults.string(forKey: baseURLKey), let url = URL(string: urlString) {
-            self.baseURL = url
+        if let urlString = defaults.string(forKey: baseURLKey),
+           let url = URL(string: urlString),
+           let canonical = ServerBootstrap.canonicalBaseURL(url) {
+            self.baseURL = canonical
+            if canonical.absoluteString != urlString {
+                defaults.set(canonical.absoluteString, forKey: baseURLKey)
+            }
         } else {
             self.baseURL = nil
         }
@@ -37,10 +43,11 @@ final class AppConfig: ObservableObject {
 
     /// Persist (or clear) the base URL.
     func setBaseURL(_ url: URL?) {
-        baseURL = url
-        if let url {
-            defaults.set(url.absoluteString, forKey: baseURLKey)
+        if let url, let canonical = ServerBootstrap.canonicalBaseURL(url) {
+            baseURL = canonical
+            defaults.set(canonical.absoluteString, forKey: baseURLKey)
         } else {
+            baseURL = nil
             defaults.removeObject(forKey: baseURLKey)
         }
     }
@@ -51,4 +58,3 @@ final class AppConfig: ObservableObject {
         baseURL = nil
     }
 }
-

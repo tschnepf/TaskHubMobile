@@ -11,6 +11,9 @@ import Combine
 import os.log
 import WidgetKit
 import CryptoKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 actor LocalProjectCache {
     private var names: [String] = []
@@ -52,19 +55,6 @@ actor LocalProjectCache {
     }
 }
 
-enum TaskArea: String, Codable { case work, personal }
-
-enum TaskPriority: Int, Codable, CaseIterable, Identifiable {
-    case one = 1, two, three, four, five
-    var id: Int { rawValue }
-    var displayName: String { String(rawValue) }
-}
-
-enum RepeatRule: String, Codable, CaseIterable, Identifiable {
-    case none, daily, weekly, monthly, yearly
-    var id: String { rawValue }
-}
-
 @MainActor
 final class SyncController: ObservableObject {
     private let container: ModelContainer
@@ -81,11 +71,14 @@ final class SyncController: ObservableObject {
 
     private var backoffSeconds: TimeInterval = 0
     private let maxBackoff: TimeInterval = 60
+    private var lastBackfillAt: Date?
+    private let backfillMinimumInterval: TimeInterval = 15 * 60
 
     private lazy var widgetCache: WidgetCache = {
-        WidgetCache(appGroupID: AppIdentifiers.appGroupID, apiClientProvider: { [weak self] in
-            let base = self?.appConfig.baseURL
-            return APIClient(baseURLProvider: { base }, authStore: self!.authStore)
+        let appConfig = self.appConfig
+        let authStore = self.authStore
+        return WidgetCache(appGroupID: AppIdentifiers.appGroupID, apiClientProvider: {
+            APIClient(baseURLProvider: { appConfig.baseURL }, authStore: authStore)
         })
     }()
     private let projectCache = LocalProjectCache(suiteName: nil)
@@ -144,6 +137,35 @@ final class SyncController: ObservableObject {
         let hash = SHA256.hash(data: seed)
         return hash.compactMap { String(format: "%02x", $0) }.joined()
     }
+
+    private func preferredLiveSyncInterval() -> TimeInterval {
+        #if canImport(UIKit)
+        switch UIApplication.shared.applicationState {
+        case .active:
+            return 20
+        case .inactive:
+            return 45
+        case .background:
+            return 90
+        @unknown default:
+            return 30
+        }
+        #else
+        return 30
+        #endif
+    }
+
+    private func shouldRunBackfill(now: Date = Date()) -> Bool {
+        guard let lastBackfillAt else {
+            self.lastBackfillAt = now
+            return true
+        }
+        guard now.timeIntervalSince(lastBackfillAt) >= backfillMinimumInterval else {
+            return false
+        }
+        self.lastBackfillAt = now
+        return true
+    }
     
     func startLiveSyncLoop() {
         guard liveLoopTask == nil else { return }
@@ -155,10 +177,10 @@ final class SyncController: ObservableObject {
                 if self.authStore.accessToken != nil {
                     self.syncNow()
                 }
-                // Adaptive delay: use backoffSeconds if set, else 5s; clamp 3-10s
-                var delay = max(3, min(10, Int(self.backoffSeconds == 0 ? 5 : self.backoffSeconds)))
-                // If we are currently syncing, back off slightly
-                if self.isSyncing { delay = min(10, delay + 2) }
+                let baseInterval = self.preferredLiveSyncInterval()
+                let adaptive = self.backoffSeconds > 0 ? max(baseInterval, self.backoffSeconds) : baseInterval
+                var delay = Int(max(10, min(120, adaptive)))
+                if self.isSyncing { delay = min(120, delay + 5) }
                 try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
             }
         }
@@ -181,11 +203,15 @@ final class SyncController: ObservableObject {
         if isSyncing { return }
         // Respect simple backoff window
         if let next = nextAllowedSync, Date() < next { return }
-        Task { [weak self, engine] in
+        guard let engine else {
+            lastError = "Sync engine unavailable."
+            return
+        }
+        Task { [weak self] in
             guard let self else { return }
             do {
                 await MainActor.run { self.isSyncing = true }
-                try await engine?.performInitialOrDeltaSync()
+                try await engine.performInitialOrDeltaSync()
                 await MainActor.run {
                     self.isSyncing = false
                     self.lastSync = Date()
@@ -193,8 +219,12 @@ final class SyncController: ObservableObject {
                     self.backoffSeconds = 0
                     self.nextAllowedSync = nil
                     Task { await self.widgetCache.refreshSnapshotIfNeeded(); WidgetCenter.shared.reloadAllTimelines() }
+                    self.writeWidgetSnapshotFromStore()
+                    WidgetCenter.shared.reloadAllTimelines()
                     Task { await self.refreshProjectsCache() }
-                    Task { await self.backfillMissingAreas(limit: 50) }
+                    if self.shouldRunBackfill() {
+                        Task { await self.backfillMissingAreas(limit: 20) }
+                    }
                 }
             } catch {
                 if case APIClientError.unauthorized = error {
@@ -273,10 +303,47 @@ final class SyncController: ObservableObject {
     }
 
     func refreshWidgetSnapshot() {
-        Task { [weak self] in
-            await self?.widgetCache.refreshSnapshot()
-            WidgetCenter.shared.reloadAllTimelines()
+        self.writeWidgetSnapshotFromStore()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func setTaskCompleted(taskID: String, completed: Bool) async throws {
+        guard let base = appConfig.baseURL else {
+            throw APIClientError.missingBaseURL
         }
+
+        let client = APIClient(baseURLProvider: { base }, authStore: authStore)
+        let updated = try await client.updateTask(id: taskID, title: nil, completed: completed, dueAt: nil)
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        if let item = all.first(where: { $0.serverID == taskID }) {
+            item.completed = updated.is_completed
+            if let updatedAt = updated.updated_at {
+                item.updatedAt = updatedAt
+            } else {
+                item.updatedAt = Date()
+            }
+            item.dueAt = updated.due_at
+            item.project = updated.projectId
+            item.projectId = updated.projectId
+            item.projectName = updated.projectName
+            if let area = updated.area {
+                switch area {
+                case .personal:
+                    item.areaRaw = "personal"
+                case .work:
+                    item.areaRaw = "work"
+                case .unknown(let value):
+                    item.areaRaw = value.lowercased()
+                }
+            }
+            try context.save()
+        }
+
+        lastError = nil
+        triggerImmediateDelta()
     }
     
     private func backfillMissingAreas(limit: Int = 50) async {
@@ -312,6 +379,43 @@ final class SyncController: ObservableObject {
         }
     }
     
+    // MARK: - Widget Snapshot Writing
+    private func widgetSnapshotURL() -> URL? {
+        guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppIdentifiers.appGroupID) else { return nil }
+        let dir = container.appendingPathComponent("widget", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("widget_tasks.json")
+    }
+
+    private func writeWidgetSnapshotFromStore(limit: Int = 7) {
+        // Build a throwaway ModelContext to perform a read-only fetch
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        do {
+            var descriptor = FetchDescriptor<TaskItem>(
+                sortBy: [
+                    SortDescriptor(\TaskItem.dueAt, order: .forward),
+                    SortDescriptor(\TaskItem.title, order: .forward)
+                ]
+            )
+            descriptor.fetchLimit = limit
+            let items = try context.fetch(descriptor)
+            struct OutItem: Codable {
+                enum CodingKeys: String, CodingKey { case title, isCompleted = "is_completed", dueAt = "due_at" }
+                let title: String; let isCompleted: Bool; let dueAt: Date?
+            }
+            struct OutSnapshot: Codable { let count: Int; let tasks: [OutItem] }
+            let mapped = items.map { OutItem(title: $0.title, isCompleted: $0.completed, dueAt: $0.dueAt) }
+            let snapshot = OutSnapshot(count: mapped.count, tasks: mapped)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let url = widgetSnapshotURL(), let data = try? encoder.encode(snapshot) else { return }
+            try? data.write(to: url, options: [.atomic])
+        } catch {
+            // Ignore snapshot write errors; widget will show placeholder or empty state
+        }
+    }
+    
     deinit {
         liveLoopTask?.cancel()
         authTokenCancellable?.cancel()
@@ -319,4 +423,3 @@ final class SyncController: ObservableObject {
 }
 
 extension SyncController: Syncing {}
-

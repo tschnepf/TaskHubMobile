@@ -5,18 +5,15 @@
       location = "self:">
    </FileRef>
    <FileRef
-      location = "group:SettingsView.swift">
+      location = "group:AppPreferencesView.swift">
    </FileRef>
    <FileRef
-      location = "group:ProjectCache.swift">
+      location = "group:DeveloperSettingsView 2.swift">
    </FileRef>
    <FileRef
-      location = "group:ProjectCache 2.swift">
+      location = "group:DeveloperSettingsView 3.swift">
    </FileRef>
    <FileRef
-      location = "group:ProjectCache 3.swift">
-   </FileRef>
-   <FileRef
-      location = "group:TaskHubMobile.entitlements">
+      location = "group:SettingsView 4.swift">
    </FileRef>
 </Workspace>

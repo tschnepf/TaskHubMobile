@@ -9,18 +9,16 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
-    @EnvironmentObject private var appConfig: AppConfig
-    @EnvironmentObject private var authStore: AuthStore
-    @EnvironmentObject private var syncController: SyncController
-    @EnvironmentObject private var deviceRegistry: DeviceRegistry
-    @EnvironmentObject private var networkMonitor: NetworkMonitor
+    @EnvironmentObject private var env: DefaultAppEnvironment
     @Environment(\.scenePhase) private var scenePhase
+
     @State private var newTaskTitle: String = ""
     @State private var isSigningIn = false
     @State private var errorMessage: String?
+    @State private var isPresentingErrorAlert: Bool = false
     @State private var onboardingRequired: Bool = false
 
-    @State private var showingAddSheet: Bool = false
+    @State private var isPresentingCreateTaskSheet: Bool = false
     @State private var addSheetTitle: String = ""
     @State private var addSheetArea: TaskArea = .personal
     @State private var addSheetPriority: TaskPriority = .three
@@ -32,6 +30,12 @@ struct ContentView: View {
     @State private var projectSuggestions: [String] = []
     @State private var suggestionTask: Task<Void, Never>? = nil
 
+    private var appConfig: AppConfig { env.appConfig }
+    private var authStore: AuthStore { env.authStore }
+    private var syncController: SyncController { env.syncController }
+    private var deviceRegistry: DeviceRegistry { env.deviceRegistry }
+    private var networkMonitor: NetworkMonitor { env.networkMonitor }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -41,7 +45,7 @@ struct ContentView: View {
                             syncController.syncNow()
                         }
                     }
-                
+
                 if !networkMonitor.isOnline {
                     VStack {
                         HStack {
@@ -59,29 +63,8 @@ struct ContentView: View {
                     .transition(.move(edge: .top))
                 }
 
-                if syncController.isSyncing {
-                    VStack {
-                        HStack {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .scaleEffect(0.8)
-                            Text("Syncing…")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                        .padding(8)
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .padding()
-                        Spacer()
-                    }
-                    .transition(.opacity)
-                }
-
                 if onboardingRequired {
                     OnboardingView(message: "Your identity needs to be linked by an administrator before you can sign in.") {
-                        // Retry session check
                         Task { await checkSession() }
                     }
                     .background(.ultraThinMaterial)
@@ -106,15 +89,17 @@ struct ContentView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         addSheetTitle = ""
-                        showingAddSheet = true
+                        isPresentingCreateTaskSheet = true
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Add Task")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(destination: SettingsView()) {
                         Image(systemName: "gearshape")
                     }
+                    .accessibilityLabel("Open Settings")
                 }
             }
             .onAppear {
@@ -122,8 +107,8 @@ struct ContentView: View {
                 syncController.syncOnForeground()
                 deviceRegistry.syncRegistrationOnForeground()
             }
-            .sheet(isPresented: $showingAddSheet) { addTaskSheet }
-            .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            .sheet(isPresented: $isPresentingCreateTaskSheet) { createTaskSheet }
+            .alert("Error", isPresented: $isPresentingErrorAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(errorMessage ?? "")
@@ -137,11 +122,16 @@ struct ContentView: View {
                     syncController.stopLiveSyncLoop()
                 }
             }
+            .onChange(of: isPresentingErrorAlert) { _, newValue in
+                if !newValue {
+                    errorMessage = nil
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private var addTaskSheet: some View {
+    private var createTaskSheet: some View {
         NavigationStack {
             Form {
                 Section(header: Text("New Task")) {
@@ -163,24 +153,27 @@ struct ContentView: View {
                 }
                 Section(header: Text("Project")) {
                     TextField("Project (name)", text: $addSheetProject)
-                        .onChange(of: addSheetProject) { oldValue, newValue in
+                        .onChange(of: addSheetProject) { _, newValue in
                             suggestionTask?.cancel()
                             let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !query.isEmpty else {
-                                self.projectSuggestions = []
+                                projectSuggestions = []
                                 return
                             }
                             suggestionTask = Task {
-                                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms debounce
+                                try? await Task.sleep(nanoseconds: 200_000_000)
                                 guard !Task.isCancelled else { return }
                                 let results = await syncController.projectSuggestions(prefix: query)
-                                await MainActor.run { self.projectSuggestions = results }
+                                await MainActor.run { projectSuggestions = results }
                             }
                         }
                     if !projectSuggestions.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(projectSuggestions, id: \.self) { name in
-                                Button(action: { self.addSheetProject = name; self.projectSuggestions = [] }) {
+                                Button(action: {
+                                    addSheetProject = name
+                                    projectSuggestions = []
+                                }) {
                                     HStack(spacing: 8) {
                                         Image(systemName: "folder")
                                             .foregroundStyle(.secondary)
@@ -210,7 +203,7 @@ struct ContentView: View {
             .navigationTitle("Add Task")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showingAddSheet = false }
+                    Button("Cancel") { isPresentingCreateTaskSheet = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
@@ -233,17 +226,20 @@ struct ContentView: View {
                                 addSheetHasDueDate = false
                                 addSheetDueDate = .now
                                 addSheetRepeat = .none
-                                showingAddSheet = false
-                                await MainActor.run {
-                                    projectSuggestions = []
-                                }
+                                isPresentingCreateTaskSheet = false
+                                await MainActor.run { projectSuggestions = [] }
                             } catch {
-                                if let apiErr = error as? APIClientError, case let .serverError(_, message, requestID, _) = apiErr {
-                                    if let req = requestID { errorMessage = "Create failed: \(message) (req: \(req))" }
-                                    else { errorMessage = "Create failed: \(message)" }
+                                if let apiErr = error as? APIClientError,
+                                   case let .serverError(_, message, requestID, _) = apiErr {
+                                    if let req = requestID {
+                                        errorMessage = "Create failed: \(message) (req: \(req))"
+                                    } else {
+                                        errorMessage = "Create failed: \(message)"
+                                    }
                                 } else {
                                     errorMessage = error.localizedDescription
                                 }
+                                isPresentingErrorAlert = true
                             }
                         }
                     }
@@ -255,13 +251,14 @@ struct ContentView: View {
 
     private func signIn() {
         guard let base = appConfig.baseURL else { return }
+        appConfig.setBaseURL(base)
+        guard let canonicalBase = appConfig.baseURL else { return }
         errorMessage = nil
         isSigningIn = true
         Task {
             do {
-                try await authStore.signIn(baseURL: base)
+                try await authStore.signIn(baseURL: canonicalBase)
                 await checkSession()
-                // After successful login, attempt device registration and initial sync
                 await MainActor.run {
                     deviceRegistry.syncRegistrationOnForeground()
                     syncController.syncNow()
@@ -269,6 +266,7 @@ struct ContentView: View {
                 isSigningIn = false
             } catch {
                 errorMessage = error.localizedDescription
+                isPresentingErrorAlert = true
                 isSigningIn = false
             }
         }
@@ -288,28 +286,19 @@ struct ContentView: View {
             } else {
                 onboardingRequired = false
                 errorMessage = nsErr.localizedDescription
+                isPresentingErrorAlert = true
             }
         }
     }
 }
 
 #Preview {
-    let appConfig = AppConfig()
-    let authStore = AuthStore()
-    // In-memory SwiftData container for previews
     let schema = Schema([TaskItem.self])
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
     let container = try! ModelContainer(for: schema, configurations: [config])
-    let syncController = SyncController(container: container, appConfig: appConfig, authStore: authStore)
-    let deviceRegistry = DeviceRegistry(appConfig: appConfig, authStore: authStore)
-    let networkMonitor = NetworkMonitor()
+    let env = DefaultAppEnvironment(modelContainer: container)
 
     ContentView()
-        .environmentObject(appConfig)
-        .environmentObject(authStore)
-        .environmentObject(syncController)
-        .environmentObject(deviceRegistry)
-        .environmentObject(networkMonitor)
+        .environmentObject(env)
         .modelContainer(container)
 }
-

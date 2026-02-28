@@ -12,6 +12,31 @@ enum SyncError: Error {
     case cursorExpired
 }
 
+fileprivate enum SyncDateCodec {
+    nonisolated(unsafe) static let iso8601Fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    nonisolated(unsafe) static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    nonisolated static func parse(_ value: String) -> Date? {
+        if let withFractional = iso8601Fractional.date(from: value) {
+            return withFractional
+        }
+        return iso8601.date(from: value)
+    }
+
+    nonisolated static func string(from date: Date) -> String {
+        iso8601Fractional.string(from: date)
+    }
+}
+
 actor SyncEngine {
     private let api: APIClient
     private let container: ModelContainer
@@ -56,6 +81,12 @@ actor SyncEngine {
     }
 
     func performInitialOrDeltaSync() async throws {
+        // If local store is empty, a cursor-only delta can produce no rows.
+        // Force full snapshot bootstrap so the UI always has a baseline.
+        if localTaskCount() == 0 {
+            try await runFullSync()
+            return
+        }
         let cursor = currentCursor()
         if let cursor, !cursor.isEmpty {
             try await runDelta(cursor: cursor)
@@ -124,6 +155,15 @@ actor SyncEngine {
         }
 
         try context.save()
+        try pruneExpiredCompletedTasks(in: context)
+    }
+
+    private func localTaskCount() -> Int {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let descriptor = FetchDescriptor<TaskItem>()
+        let items = (try? context.fetch(descriptor)) ?? []
+        return items.count
     }
 
     private func importTasks(_ tasks: [TaskDTO]) async throws {
@@ -192,66 +232,174 @@ actor SyncEngine {
         let context = ModelContext(container)
         context.autosaveEnabled = false
 
-        func parseISO8601(_ s: String) -> Date? {
-            let f1 = ISO8601DateFormatter(); f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let d = f1.date(from: s) { return d }
-            let f2 = ISO8601DateFormatter(); f2.formatOptions = [.withInternetDateTime]
-            return f2.date(from: s)
-        }
-
         do {
-            var all = try context.fetch(FetchDescriptor<TaskItem>())
+            let existing = try context.fetch(FetchDescriptor<TaskItem>())
+            var tasksByServerID: [String: TaskItem] = [:]
+            tasksByServerID.reserveCapacity(existing.count)
+            for item in existing {
+                tasksByServerID[item.serverID] = item
+            }
 
             for e in events {
-                let serverID = e.task_id ?? ""
+                let serverID = (e.task_id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !serverID.isEmpty else {
+                    continue
+                }
                 let summary = e.payload_summary ?? [:]
-                var title: String? = nil
-                var isCompleted: Bool = false
-                var dueAt: Date? = nil
-                var updatedAt: Date = e.occurred_at
-                var project: String? = nil
-                var projectName: String? = nil
-                var areaValue: String? = nil
 
-                if let v = summary["title"], case let MobileDeltaJSONValue.string(t) = v { title = t }
-                if let v = summary["is_completed"], case let MobileDeltaJSONValue.bool(b) = v { isCompleted = b }
-                if let v = summary["due_at"], case let MobileDeltaJSONValue.string(s) = v { dueAt = parseISO8601(s) }
-                if let v = summary["updated_at"], case let MobileDeltaJSONValue.string(s) = v, let d = parseISO8601(s) { updatedAt = d }
-                if let v = summary["project"], case let MobileDeltaJSONValue.string(p) = v { project = p }
-                if let v = summary["project_name"], case let MobileDeltaJSONValue.string(n) = v { projectName = n }
-                if let v = summary["area"], case let MobileDeltaJSONValue.string(a) = v { areaValue = a.lowercased() }
+                let hasTitle = summary["title"] != nil
+                let hasCompleted = summary["is_completed"] != nil
+                let hasDueAt = summary["due_at"] != nil
+                let hasUpdatedAt = summary["updated_at"] != nil
+                let hasProject = summary["project"] != nil
+                let hasProjectName = summary["project_name"] != nil
+                let hasArea = summary["area"] != nil
+
+                var title: String? = nil
+                if case let .string(value)? = summary["title"] {
+                    title = value
+                }
+
+                var isCompleted: Bool? = nil
+                if let completedValue = summary["is_completed"] {
+                    switch completedValue {
+                    case let .bool(value):
+                        isCompleted = value
+                    case let .number(value):
+                        isCompleted = value != 0
+                    case let .string(value):
+                        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        isCompleted = ["1", "true", "yes", "on", "done", "archived"].contains(normalized)
+                    default:
+                        break
+                    }
+                }
+
+                var dueAt: Date?? = nil
+                if let dueValue = summary["due_at"] {
+                    switch dueValue {
+                    case let .string(value):
+                        dueAt = SyncDateCodec.parse(value)
+                    case .null:
+                        dueAt = nil
+                    default:
+                        break
+                    }
+                }
+
+                var updatedAt: Date? = nil
+                if case let .string(value)? = summary["updated_at"],
+                   let parsed = SyncDateCodec.parse(value) {
+                    updatedAt = parsed
+                }
+
+                var project: String? = nil
+                if let projectValue = summary["project"] {
+                    switch projectValue {
+                    case let .string(value):
+                        project = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    case .null:
+                        project = nil
+                    default:
+                        break
+                    }
+                }
+
+                var projectName: String? = nil
+                if let projectNameValue = summary["project_name"] {
+                    switch projectNameValue {
+                    case let .string(value):
+                        projectName = value
+                    case .null:
+                        projectName = nil
+                    default:
+                        break
+                    }
+                }
+
+                var areaValue: String? = nil
+                if let areaSummary = summary["area"] {
+                    switch areaSummary {
+                    case let .string(value):
+                        areaValue = value.lowercased()
+                    case .null:
+                        areaValue = nil
+                    default:
+                        break
+                    }
+                }
 
                 print("[Import] Event type=\(e.event_type) serverID=\(serverID) tombstone=\(e.tombstone) title=\(title ?? "<nil>")")
 
                 if e.tombstone || e.event_type == "task.deleted" || e.event_type.hasSuffix(".deleted") {
-                    // Delete if exists
-                    if let idx = all.firstIndex(where: { $0.serverID == serverID }) {
-                        let existing = all.remove(at: idx)
-                        context.delete(existing)
+                    if let existingTask = tasksByServerID.removeValue(forKey: serverID) {
+                        context.delete(existingTask)
                     }
                     continue
                 }
 
-                if let idx = all.firstIndex(where: { $0.serverID == serverID }) {
-                    let existing = all[idx]
-                    if let t = title { existing.title = t }
-                    existing.completed = isCompleted
-                    existing.dueAt = dueAt
-                    existing.updatedAt = updatedAt
-                    if let p = project { existing.project = p; existing.projectId = p }
-                    if let n = projectName { existing.projectName = n }
-                    if let a = areaValue { existing.areaRaw = a }
+                if let existingTask = tasksByServerID[serverID] {
+                    if hasTitle, let title {
+                        existingTask.title = title
+                    }
+                    if hasCompleted, let isCompleted {
+                        existingTask.completed = isCompleted
+                    }
+                    if hasDueAt {
+                        existingTask.dueAt = dueAt ?? nil
+                    }
+                    if hasUpdatedAt {
+                        existingTask.updatedAt = updatedAt ?? e.occurred_at
+                    }
+                    if hasProject {
+                        existingTask.project = project
+                        existingTask.projectId = project
+                    }
+                    if hasProjectName {
+                        existingTask.projectName = projectName
+                    }
+                    if hasArea {
+                        existingTask.areaRaw = areaValue
+                    }
                 } else {
-                    let newItem = TaskItem(serverID: serverID, title: title ?? "Untitled", completed: isCompleted, updatedAt: updatedAt, dueAt: dueAt, project: project, projectId: project, projectName: projectName, areaRaw: areaValue)
+                    let newItem = TaskItem(
+                        serverID: serverID,
+                        title: title ?? "Untitled",
+                        completed: isCompleted ?? false,
+                        updatedAt: updatedAt ?? e.occurred_at,
+                        dueAt: dueAt ?? nil,
+                        project: project,
+                        projectId: project,
+                        projectName: projectName,
+                        areaRaw: areaValue
+                    )
                     context.insert(newItem)
-                    all.append(newItem)
+                    tasksByServerID[serverID] = newItem
                 }
+            }
+
+            let cutoff = Date().addingTimeInterval(-(24 * 60 * 60))
+            for item in tasksByServerID.values where item.completed && item.updatedAt < cutoff {
+                context.delete(item)
             }
             try context.save()
             print("[Import] Saved batch. New cursor:", newCursor)
             saveCursor(newCursor)
         } catch {
             throw error
+        }
+    }
+
+    private func pruneExpiredCompletedTasks(in context: ModelContext) throws {
+        let cutoff = Date().addingTimeInterval(-(24 * 60 * 60))
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        var removed = false
+        for item in all where item.completed && item.updatedAt < cutoff {
+            context.delete(item)
+            removed = true
+        }
+        if removed {
+            try context.save()
         }
     }
 
@@ -274,15 +422,12 @@ actor SyncEngine {
             let due_at: String?
             let recurrence: RepeatRule?
         }
-        let iso: (Date) -> String = { d in
-            let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f.string(from: d)
-        }
         let body = CreateTaskBody(
             title: title,
             project: projectName?.trimmingCharacters(in: .whitespacesAndNewlines),
             area: area,
             priority: priority?.rawValue,
-            due_at: dueAt.map(iso),
+            due_at: dueAt.map { SyncDateCodec.string(from: $0) },
             recurrence: repeatRule
         )
         let _: EmptyDecodable = try await api.post("api/mobile/v1/tasks", body: body, idempotencyKey: idempotencyKey)
@@ -305,4 +450,3 @@ actor SyncEngine {
 
     private struct EmptyDecodable: Decodable {}
 }
-

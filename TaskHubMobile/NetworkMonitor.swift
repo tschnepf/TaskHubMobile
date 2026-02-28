@@ -21,10 +21,14 @@ final class NetworkMonitor: ObservableObject {
     init() {
         self.monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor in
-                self?.isOnline = (path.status == .satisfied)
-                self?.isExpensive = path.isExpensive
-                self?.isConstrained = path.isConstrained
+            let isOnline = (path.status == .satisfied)
+            let isExpensive = path.isExpensive
+            let isConstrained = path.isConstrained
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isOnline = isOnline
+                self.isExpensive = isExpensive
+                self.isConstrained = isConstrained
             }
         }
         monitor.start(queue: queue)

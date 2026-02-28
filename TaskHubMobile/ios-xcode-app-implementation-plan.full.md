@@ -1282,14 +1282,36 @@ final class PreferencesStore: ObservableObject {
     @Published var visibleFilters: Set<TaskFilterOption> = [.all, .dueToday, .completed]
     @Published var defaultWidgetFilter: TaskFilterOption = .all
 
-    init(appGroupCache: AppGroupCache) {
-        self.appGroupCache = appGroupCache
-        Task { await load() }
+    @Published var workColor: Color = Color(red: 0.12, green: 0.47, blue: 0.95)
+    @Published var personalColor: Color = Color(red: 0.18, green: 0.80, blue: 0.44)
+
+    struct RGBA: Codable { let r: Double; let g: Double; let b: Double; let a: Double }
+
+    private func colorToRGBA(_ color: Color) -> RGBA {
+        #if canImport(UIKit)
+        let ui = UIColor(color)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        ui.getRed(&r, &g, &b, &a)
+        return RGBA(r: Double(r), g: Double(g), b: Double(b), a: Double(a))
+        #else
+        return RGBA(r: 0, g: 0, b: 0, a: 1)
+        #endif
+    }
+
+    private func rgbaToColor(_ rgba: RGBA) -> Color {
+        Color(red: rgba.r, green: rgba.g, blue: rgba.b, opacity: rgba.a)
     }
 
     struct StoredPrefs: Codable {
         let visibleFilters: [TaskFilterOption]
         let defaultWidgetFilter: TaskFilterOption
+        let workColor: RGBA
+        let personalColor: RGBA
+    }
+
+    init(appGroupCache: AppGroupCache) {
+        self.appGroupCache = appGroupCache
+        Task { await load() }
     }
 
     func load() async {
@@ -1298,17 +1320,30 @@ final class PreferencesStore: ObservableObject {
             if let stored = try? decoder.decode(StoredPrefs.self, from: data) {
                 self.visibleFilters = Set(stored.visibleFilters)
                 self.defaultWidgetFilter = stored.defaultWidgetFilter
+                self.workColor = rgbaToColor(stored.workColor)
+                self.personalColor = rgbaToColor(stored.personalColor)
                 return
             }
         }
-        await save() // write defaults
+        await save() // write defaults (including theme.json)
     }
 
     func save() async {
-        let stored = StoredPrefs(visibleFilters: Array(visibleFilters), defaultWidgetFilter: defaultWidgetFilter)
+        let stored = StoredPrefs(
+            visibleFilters: Array(visibleFilters),
+            defaultWidgetFilter: defaultWidgetFilter,
+            workColor: colorToRGBA(workColor),
+            personalColor: colorToRGBA(personalColor)
+        )
         let encoder = JSONEncoder()
         if let data = try? encoder.encode(stored) {
             appGroupCache.writeShared(fileName: fileName, data: data)
+        }
+
+        struct ThemeExport: Codable { let work: RGBA; let personal: RGBA }
+        let theme = ThemeExport(work: colorToRGBA(workColor), personal: colorToRGBA(personalColor))
+        if let themeData = try? JSONEncoder().encode(theme) {
+            appGroupCache.writeShared(fileName: "theme.json", data: themeData)
         }
     }
 }
@@ -1415,6 +1450,11 @@ struct AppPreferencesView: View {
                             Text(option.displayName).tag(option)
                         }
                     }
+                }
+
+                Section(header: Text("Colors"), footer: Text("Customize how Work and Personal tasks are highlighted across the app and widgets.")) {
+                    ColorPicker("Work Color", selection: Binding(get: { appPrefs.workColor }, set: { appPrefs.workColor = $0; Task { await appPrefs.save() } }))
+                    ColorPicker("Personal Color", selection: Binding(get: { appPrefs.personalColor }, set: { appPrefs.personalColor = $0; Task { await appPrefs.save() } }))
                 }
 
                 Section(header: Text("Push Notifications")) {
@@ -1635,6 +1675,7 @@ struct MainTaskListView: View {
                 } else {
                     List(filteredTasks) { task in
                         HStack(alignment: .center, spacing: 0) {
+                            let isWork = (task.project?.localizedCaseInsensitiveContains("work") ?? false)
                             Button {
                                 Task { await toggleComplete(task) }
                             } label: {
@@ -1652,8 +1693,12 @@ struct MainTaskListView: View {
                                 Group {
                                     if let name = task.project, !name.isEmpty {
                                         Text("\(name) \(task.title)")
+                                            .strikethrough(task.isCompleted, color: .secondary)
+                                            .foregroundStyle(task.isCompleted ? .secondary : (isWork ? appPrefs.workColor : appPrefs.personalColor))
                                     } else {
                                         Text(task.title)
+                                            .strikethrough(task.isCompleted, color: .secondary)
+                                            .foregroundStyle(task.isCompleted ? .secondary : (isWork ? appPrefs.workColor : appPrefs.personalColor))
                                     }
                                 }
                                 if let due = task.dueAt {
@@ -2009,6 +2054,8 @@ struct TaskHubMobileApp: App {
             RootView()
                 .environmentObject(appEnvironment)
                 .environmentObject(appEnvironment.authStore)
+                .environmentObject(appEnvironment.preferencesStore)
+                .environmentObject(appEnvironment.notificationPreferencesStore)
         }
         .modelContainer(PersistenceController.shared.container)
     }

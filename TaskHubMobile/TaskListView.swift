@@ -1,278 +1,130 @@
-//
-//  TaskListView.swift
-//  TaskHubMobile
-//
-//  Created by tim on 2/20/26.
-//
-
+import Foundation
 import SwiftUI
 import SwiftData
 
-enum TaskListScope: Hashable {
-    case all
-    case work
-    case personal
-}
-
 struct TaskListView: View {
     let scope: TaskListScope
-    @Query private var tasks: [TaskItem]
-    @Environment(\.modelContext) private var modelContext
-    @EnvironmentObject private var appConfig: AppConfig
-    @EnvironmentObject private var authStore: AuthStore
-    @EnvironmentObject private var syncController: SyncController
-    @State private var editTaskID: String? = nil
-    @State private var editTitle: String = ""
-    @State private var expandedTaskID: String? = nil
-    @State private var editHasDueDate: Bool = false
-    @State private var editDueDate: Date = .now
-    @State private var editArea: TaskArea = .personal
-    @State private var editPriority: TaskPriority = .three
-    @State private var editRepeat: RepeatRule = .none
-    @State private var editProjectName: String = ""
-    @State private var errorMessage: String? = nil
-    @State private var isSaving: Bool = false
-    
-    @State private var editDirty: Bool = false
-    @State private var editCancelled: Bool = false
+    @EnvironmentObject private var env: DefaultAppEnvironment
+    private let completedRetentionInterval: TimeInterval = 24 * 60 * 60
 
-    init(scope: TaskListScope = .all) {
+    @Query
+    private var allTasks: [TaskItem]
+    @State private var pendingTaskIDs: Set<String> = []
+    @State private var errorMessage: String?
+    @State private var isShowingError: Bool = false
+
+    init(scope: TaskListScope) {
         self.scope = scope
-        let sort = [SortDescriptor(\TaskItem.updatedAt, order: .reverse)]
-        _tasks = Query(sort: sort)
+        _allTasks = Query(sort: [SortDescriptor(\TaskItem.updatedAt, order: .reverse)])
     }
 
-    private var displayedTasks: [TaskItem] {
+    private var visibleTasks: [TaskItem] {
+        let cutoff = Date().addingTimeInterval(-completedRetentionInterval)
+        let retained = allTasks.filter { !($0.completed && $0.updatedAt < cutoff) }
+        let scoped: [TaskItem]
         switch scope {
         case .all:
-            return tasks
+            scoped = retained
         case .work:
-            let explicit = tasks.filter { $0.areaRaw == "work" }
-            let fallback = tasks.filter { ($0.areaRaw == nil || $0.areaRaw == "") && (($0.projectId != nil) || ((($0.projectName) ?? "").isEmpty == false)) }
-            var map: [String: TaskItem] = [:]
-            for t in explicit { map[t.serverID] = t }
-            for t in fallback { map[t.serverID] = t }
-            return map.values.sorted(by: { $0.updatedAt > $1.updatedAt })
+            scoped = retained.filter { ($0.areaRaw ?? "").lowercased() == "work" }
         case .personal:
-            let explicit = tasks.filter { $0.areaRaw == "personal" }
-            let fallback = tasks.filter { ($0.areaRaw == nil || $0.areaRaw == "") && ($0.projectId == nil) && ((($0.projectName) ?? "").isEmpty) }
-            var map: [String: TaskItem] = [:]
-            for t in explicit { map[t.serverID] = t }
-            for t in fallback { map[t.serverID] = t }
-            return map.values.sorted(by: { $0.updatedAt > $1.updatedAt })
+            scoped = retained.filter { ($0.areaRaw ?? "").lowercased() == "personal" }
+        }
+        return scoped.sorted(by: taskSort)
+    }
+
+    private func taskSort(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
+        if lhs.completed != rhs.completed {
+            return !lhs.completed && rhs.completed
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
+        }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private var emptyDescription: String {
+        switch scope {
+        case .all:
+            return "No tasks synced yet."
+        case .work:
+            return "No work tasks synced yet."
+        case .personal:
+            return "No personal tasks synced yet."
         }
     }
 
     var body: some View {
-        if displayedTasks.isEmpty {
-            ContentUnavailableView("No Tasks", systemImage: "checklist", description: Text("Your tasks will appear here automatically."))
-        } else {
-            List(displayedTasks) { task in
-                HStack(alignment: .center, spacing: 0) {
-                    // Compact completion button
-                    Button {
-                        toggleComplete(task)
-                    } label: {
-                        Image(systemName: task.completed ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(task.completed ? .green : .secondary)
-                            .imageScale(.large)
-                            .frame(width: 36, height: 36, alignment: .center)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer().frame(width: 6)
-
-                    // Right side opens inline editor
-                    Button {
-                        Task { await startEdit(task) }
-                    } label: {
-                        VStack(alignment: .leading) {
-                            if let name = task.projectName, !name.isEmpty {
-                                Text("\(name) \(task.title)")
+        Group {
+            if visibleTasks.isEmpty {
+                ContentUnavailableView("Tasks", systemImage: "checkmark.circle", description: Text(emptyDescription))
+            } else {
+                List(visibleTasks) { task in
+                    HStack(alignment: .top, spacing: 10) {
+                        Button {
+                            toggleCompletion(for: task)
+                        } label: {
+                            if pendingTaskIDs.contains(task.serverID) {
+                                ProgressView()
+                                    .controlSize(.small)
                             } else {
-                                Text(task.title)
+                                Image(systemName: task.completed ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(task.completed ? .green : .secondary)
                             }
-                            Text(task.updatedAt, style: .date)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
+                        .disabled(pendingTaskIDs.contains(task.serverID))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(task.title)
+                                .strikethrough(task.completed)
+                                .foregroundStyle(task.completed ? .secondary : .primary)
+                            if let due = task.dueAt {
+                                Text("Due \(due.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let project = task.projectName ?? task.project, !project.isEmpty {
+                                Text(project)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
+                    .padding(.vertical, 2)
                 }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle("Tasks")
+        .alert("Update Failed", isPresented: $isShowingError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage ?? "Unknown error")
+        }
+    }
 
-                // Inline editor expands between rows
-                if expandedTaskID == task.serverID {
-                    VStack(alignment: .leading, spacing: 12) {
-                        // Title
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Title").font(.caption).foregroundStyle(.secondary)
-                            TextField("Task title", text: $editTitle)
-                                .textFieldStyle(.roundedBorder)
-                        }
-
-                        // Area
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Area").font(.caption).foregroundStyle(.secondary)
-                            Picker("Area", selection: $editArea) {
-                                Text("Personal").tag(TaskArea.personal)
-                                Text("Work").tag(TaskArea.work)
-                            }
-                            .pickerStyle(.segmented)
-                        }
-
-                        // Priority
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Priority").font(.caption).foregroundStyle(.secondary)
-                            Picker("Priority", selection: $editPriority) {
-                                ForEach(TaskPriority.allCases) { p in
-                                    Text(p.displayName).tag(p)
-                                }
-                            }
-                        }
-
-                        // Repeat
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Repeat").font(.caption).foregroundStyle(.secondary)
-                            Picker("Repeat", selection: $editRepeat) {
-                                ForEach(RepeatRule.allCases) { r in
-                                    Text(r.rawValue.capitalized).tag(r)
-                                }
-                            }
-                        }
-
-                        // Project
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Project").font(.caption).foregroundStyle(.secondary)
-                            TextField("Project (optional)", text: $editProjectName)
-                                .textFieldStyle(.roundedBorder)
-                        }
-
-                        // Due Date
-                        VStack(alignment: .leading, spacing: 6) {
-                            Toggle("Has due date", isOn: $editHasDueDate.animation())
-                            if editHasDueDate {
-                                DatePicker("Due Date", selection: $editDueDate, displayedComponents: [.date])
-                            }
-                        }
-
-                        HStack {
-                            Button("Cancel") {
-                                editCancelled = true
-                                withAnimation { expandedTaskID = nil }
-                            }
-                            Spacer()
-                            Button(action: { Task { await saveEdits() } }) {
-                                if isSaving {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                } else {
-                                    Text("Save")
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isSaving)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                    .onChange(of: editTitle) { _, _ in editDirty = true }
-                    .onChange(of: editHasDueDate) { _, _ in editDirty = true }
-                    .onChange(of: editDueDate) { _, _ in editDirty = true }
-                    .onChange(of: editArea) { _, _ in editDirty = true }
-                    .onChange(of: editPriority) { _, _ in editDirty = true }
-                    .onChange(of: editRepeat) { _, _ in editDirty = true }
-                    .onChange(of: editProjectName) { _, _ in editDirty = true }
+    private func toggleCompletion(for task: TaskItem) {
+        let taskID = task.serverID
+        let newValue = !task.completed
+        pendingTaskIDs.insert(taskID)
+        Task {
+            do {
+                try await env.syncController.setTaskCompleted(taskID: taskID, completed: newValue)
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isShowingError = true
                 }
             }
-            .listStyle(.plain)
-            .refreshable { syncController.syncNow() }
-            .onChange(of: expandedTaskID) { _, newValue in
-                if newValue == nil, editDirty, !editCancelled {
-                    Task { await saveEdits() }
-                }
-                if newValue == nil { editCancelled = false }
-            }
-            .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(errorMessage ?? "")
+            await MainActor.run {
+                pendingTaskIDs.remove(taskID)
             }
         }
-    }
-
-    private func startEdit(_ task: TaskItem) async {
-        if expandedTaskID == task.serverID {
-            withAnimation { expandedTaskID = nil }
-            return
-        }
-        if let current = expandedTaskID, current != task.serverID, editDirty {
-            await saveEdits()
-        }
-        editTaskID = task.serverID
-        editTitle = task.title
-        if let due = task.dueAt { editDueDate = due; editHasDueDate = true } else { editHasDueDate = false }
-        editProjectName = task.projectName ?? ""
-        // Reset or keep other edit fields as needed
-        withAnimation { expandedTaskID = task.serverID }
-        editDirty = false
-        editCancelled = false
-    }
-
-    @MainActor
-    private func saveEdits() async
-    {
-        guard let id = editTaskID else { return }
-        isSaving = true
-        defer { isSaving = false }
-        print("[Edit] Save tapped for id=\(id)")
-        let client = APIClient(baseURLProvider: { appConfig.baseURL }, authStore: authStore)
-        let due = editHasDueDate ? editDueDate : nil
-        do {
-            _ = try await client.updateTask(
-                id: id,
-                title: editTitle,
-                completed: nil,
-                dueAt: due,
-                projectName: editProjectName.isEmpty ? nil : editProjectName,
-                area: editArea,
-                priority: editPriority,
-                repeatRule: editRepeat
-            )
-            if let item = try? modelContext.fetch(FetchDescriptor<TaskItem>(predicate: #Predicate { $0.serverID == id })).first {
-                item.title = editTitle
-                item.dueAt = due
-                item.project = editProjectName.isEmpty ? nil : editProjectName
-                item.projectName = editProjectName.isEmpty ? nil : editProjectName
-                item.areaRaw = editArea.rawValue
-                item.updatedAt = Date()
-                try? modelContext.save()
-            }
-            editDirty = false
-            withAnimation { expandedTaskID = nil }
-            editTaskID = nil
-            print("[Edit] Save completed for id=\(id)")
-        } catch {
-            print("[Edit] Save failed for id=\(id):", error.localizedDescription)
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
-    private func deleteTask(_ task: TaskItem) {
-        modelContext.delete(task)
-        try? modelContext.save()
-    }
-
-    private func toggleComplete(_ task: TaskItem) {
-        task.completed.toggle()
-        task.updatedAt = Date()
-        try? modelContext.save()
     }
 }
 
 #Preview {
-    TaskListView()
+    TaskListView(scope: .all)
         .modelContainer(for: TaskItem.self, inMemory: true)
 }
-

@@ -1,2 +1,0 @@
-// Obsolete duplicate SettingsView removed.
-

@@ -11,15 +11,27 @@
 import Foundation
 import Combine
 
+fileprivate enum WidgetDateParsers {
+    static let withFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static let standard: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+}
+
 fileprivate func tolerantDecoder() -> JSONDecoder {
     let d = JSONDecoder()
     d.dateDecodingStrategy = .custom { decoder in
         let c = try decoder.singleValueContainer()
         let s = try c.decode(String.self)
-        let f1 = ISO8601DateFormatter(); f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f1.date(from: s) { return d }
-        let f2 = ISO8601DateFormatter(); f2.formatOptions = [.withInternetDateTime]
-        if let d = f2.date(from: s) { return d }
+        if let d = WidgetDateParsers.withFractional.date(from: s) { return d }
+        if let d = WidgetDateParsers.standard.date(from: s) { return d }
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "Invalid ISO8601: \(s)")
     }
     return d
@@ -88,4 +100,3 @@ final class WidgetCache: ObservableObject {
         return
     }
 }
-

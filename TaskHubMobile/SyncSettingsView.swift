@@ -9,7 +9,9 @@ import SwiftUI
 import SwiftData
 
 struct SyncSettingsView: View {
-    @EnvironmentObject private var syncController: SyncController
+    @EnvironmentObject private var env: DefaultAppEnvironment
+
+    private var syncController: SyncController { env.syncController }
 
     var body: some View {
         Form {
@@ -25,15 +27,14 @@ struct SyncSettingsView: View {
                 if let err = syncController.lastError, !err.isEmpty {
                     Text(err).foregroundStyle(.red)
                 }
-                Toggle("Syncing", isOn: .constant(syncController.isSyncing))
-                    .disabled(true)
+                LabeledContent("Syncing", value: syncController.isSyncing ? "Yes" : "No")
             }
 
             Section("Actions") {
                 Button("Sync Now") { syncController.syncNow() }
                 Button("Force Full Resync") { syncController.forceFullResync() }
             }
-            
+
             Section("Widget Snapshot") {
                 if let last = syncController.lastSync {
                     LabeledContent("Last App Sync", value: last.formatted(date: .abbreviated, time: .standard))
@@ -46,17 +47,14 @@ struct SyncSettingsView: View {
 }
 
 #Preview {
-    let appConfig = AppConfig()
-    let authStore = AuthStore()
     let schema = Schema([TaskItem.self])
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
     let container = try! ModelContainer(for: schema, configurations: [config])
-    let syncController = SyncController(container: container, appConfig: appConfig, authStore: authStore)
+    let env = DefaultAppEnvironment(modelContainer: container)
 
     NavigationStack {
         SyncSettingsView()
-            .environmentObject(syncController)
+            .environmentObject(env)
     }
     .modelContainer(container)
 }
-

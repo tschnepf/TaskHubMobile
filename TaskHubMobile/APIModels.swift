@@ -7,6 +7,20 @@
 
 import Foundation
 
+fileprivate enum RFC3339Formatters {
+    static let noFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static let withFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+}
+
 fileprivate enum RFC3339Decoders {
     static func rfc3339() -> JSONDecoder {
         let d = JSONDecoder()
@@ -14,13 +28,9 @@ fileprivate enum RFC3339Decoders {
             let c = try decoder.singleValueContainer()
             let s = try c.decode(String.self)
             // Primary: no fractional seconds
-            let f1 = ISO8601DateFormatter()
-            f1.formatOptions = [.withInternetDateTime]
-            if let d = f1.date(from: s) { return d }
+            if let d = RFC3339Formatters.noFractional.date(from: s) { return d }
             // Fallback: fractional seconds
-            let f2 = ISO8601DateFormatter()
-            f2.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let d = f2.date(from: s) { return d }
+            if let d = RFC3339Formatters.withFractional.date(from: s) { return d }
             throw DecodingError.dataCorruptedError(in: c, debugDescription: "Invalid RFC3339 date: \(s)")
         }
         return d
@@ -39,4 +49,3 @@ struct APIErrorEnvelope: Decodable {
 extension JSONDecoder {
     static func mobileRFC3339() -> JSONDecoder { RFC3339Decoders.rfc3339() }
 }
-

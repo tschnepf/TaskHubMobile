@@ -19,7 +19,7 @@ final class DeviceRegistry: NSObject, ObservableObject {
 
     private let appConfig: AppConfig
     private let authStore: AuthStore
-    private let keychain = KeychainStore(service: "com.yourorg.taskhub.device", accessGroup: AppIdentifiers.keychainAccessGroup)
+    private let keychain = KeychainStore(service: "com.ie.taskhub.device", accessGroup: AppIdentifiers.keychainAccessGroup)
     private let installationIDKey = "device.installation.id"
 
     init(appConfig: AppConfig, authStore: AuthStore) {

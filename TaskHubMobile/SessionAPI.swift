@@ -10,6 +10,27 @@ import Foundation
 struct SessionInfo: Decodable {
     let userID: String
     let email: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userID
+        case user_id
+        case email
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let snake = try container.decodeIfPresent(String.self, forKey: .user_id) {
+            userID = snake
+        } else if let camel = try container.decodeIfPresent(String.self, forKey: .userID) {
+            userID = camel
+        } else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.user_id,
+                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing user id")
+            )
+        }
+        email = try container.decodeIfPresent(String.self, forKey: .email)
+    }
 }
 
 enum SessionAPI {

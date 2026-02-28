@@ -7,7 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		223C32422F512F1C00B9E082 /* TaskHubWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E7F2AB2F4FEF8E006743D5 /* TaskHubWidget.swift */; };
+		223C32442F513FB200B9E082 /* ThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 223C32432F513FB200B9E082 /* ThemeStore.swift */; };
 		22E7F2A82F4E86F6006743D5 /* MobileTaskDTOs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E7F2A72F4E86F6006743D5 /* MobileTaskDTOs.swift */; };
+		22E7F2AC2F4FEF8E006743D5 /* TaskHubWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E7F2AB2F4FEF8E006743D5 /* TaskHubWidget.swift */; };
+		22E7F2B42F512527006743D5 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 22E7F2B32F512527006743D5 /* WidgetKit.framework */; };
+		22E7F2B62F512527006743D5 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 22E7F2B52F512527006743D5 /* SwiftUI.framework */; };
+		22E7F2C72F512528006743D5 /* TaskHubWidgetExtensionExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 22E7F2B12F512527006743D5 /* TaskHubWidgetExtensionExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,18 +31,68 @@
 			remoteGlobalIDString = 22092D4E2F49022C00F1A70E;
 			remoteInfo = TaskHubMobile;
 		};
+		22E7F2C52F512528006743D5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 22092D472F49022C00F1A70E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 22E7F2B02F512527006743D5;
+			remoteInfo = TaskHubWidgetExtensionExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		22E7F2CC2F512528006743D5 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				22E7F2C72F512528006743D5 /* TaskHubWidgetExtensionExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		22092D4F2F49022C00F1A70E /* TaskHubMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TaskHubMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		22092D5C2F49022D00F1A70E /* TaskHubMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaskHubMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		22092D662F49022E00F1A70E /* TaskHubMobileUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TaskHubMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		223C32432F513FB200B9E082 /* ThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeStore.swift; sourceTree = "<group>"; };
 		22E7F2A72F4E86F6006743D5 /* MobileTaskDTOs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTaskDTOs.swift; sourceTree = "<group>"; };
+		22E7F2AB2F4FEF8E006743D5 /* TaskHubWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskHubWidget.swift; sourceTree = "<group>"; };
+		22E7F2B12F512527006743D5 /* TaskHubWidgetExtensionExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TaskHubWidgetExtensionExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		22E7F2B32F512527006743D5 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		22E7F2B52F512527006743D5 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		22E7F2CD2F51255E006743D5 /* TaskHubWidgetExtensionExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TaskHubWidgetExtensionExtension.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		22E7F2C82F512528006743D5 /* Exceptions for "TaskHubWidgetExtension" folder in "TaskHubWidgetExtensionExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 22E7F2B02F512527006743D5 /* TaskHubWidgetExtensionExtension */;
+		};
+		22E7F2CF2F51274F006743D5 /* Exceptions for "TaskHubMobile" folder in "TaskHubMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				"ios-xcode-app-implementation-plan.full.md",
+				"ios-xcode-app-implementation-plan.revised.md",
+				"WorldA-Consolidation-Plan.md",
+			);
+			target = 22092D4E2F49022C00F1A70E /* TaskHubMobile */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		22092D512F49022C00F1A70E /* TaskHubMobile */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				22E7F2CF2F51274F006743D5 /* Exceptions for "TaskHubMobile" folder in "TaskHubMobile" target */,
+			);
 			path = TaskHubMobile;
 			sourceTree = "<group>";
 		};
@@ -48,6 +104,14 @@
 		22092D692F49022E00F1A70E /* TaskHubMobileUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = TaskHubMobileUITests;
+			sourceTree = "<group>";
+		};
+		22E7F2B72F512527006743D5 /* TaskHubWidgetExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				22E7F2C82F512528006743D5 /* Exceptions for "TaskHubWidgetExtension" folder in "TaskHubWidgetExtensionExtension" target */,
+			);
+			path = TaskHubWidgetExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -74,17 +138,31 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		22E7F2AE2F512527006743D5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				22E7F2B62F512527006743D5 /* SwiftUI.framework in Frameworks */,
+				22E7F2B42F512527006743D5 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		22092D462F49022C00F1A70E = {
 			isa = PBXGroup;
 			children = (
+				22E7F2CD2F51255E006743D5 /* TaskHubWidgetExtensionExtension.entitlements */,
 				22092D512F49022C00F1A70E /* TaskHubMobile */,
 				22092D5F2F49022E00F1A70E /* TaskHubMobileTests */,
 				22092D692F49022E00F1A70E /* TaskHubMobileUITests */,
+				22E7F2B72F512527006743D5 /* TaskHubWidgetExtension */,
+				22E7F2B22F512527006743D5 /* Frameworks */,
 				22092D502F49022C00F1A70E /* Products */,
 				22E7F2A72F4E86F6006743D5 /* MobileTaskDTOs.swift */,
+				22E7F2AB2F4FEF8E006743D5 /* TaskHubWidget.swift */,
+				223C32432F513FB200B9E082 /* ThemeStore.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -94,8 +172,18 @@
 				22092D4F2F49022C00F1A70E /* TaskHubMobile.app */,
 				22092D5C2F49022D00F1A70E /* TaskHubMobileTests.xctest */,
 				22092D662F49022E00F1A70E /* TaskHubMobileUITests.xctest */,
+				22E7F2B12F512527006743D5 /* TaskHubWidgetExtensionExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		22E7F2B22F512527006743D5 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				22E7F2B32F512527006743D5 /* WidgetKit.framework */,
+				22E7F2B52F512527006743D5 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -108,10 +196,12 @@
 				22092D4B2F49022C00F1A70E /* Sources */,
 				22092D4C2F49022C00F1A70E /* Frameworks */,
 				22092D4D2F49022C00F1A70E /* Resources */,
+				22E7F2CC2F512528006743D5 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				22E7F2C62F512528006743D5 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				22092D512F49022C00F1A70E /* TaskHubMobile */,
@@ -169,6 +259,28 @@
 			productReference = 22092D662F49022E00F1A70E /* TaskHubMobileUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		22E7F2B02F512527006743D5 /* TaskHubWidgetExtensionExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 22E7F2C92F512528006743D5 /* Build configuration list for PBXNativeTarget "TaskHubWidgetExtensionExtension" */;
+			buildPhases = (
+				22E7F2AD2F512527006743D5 /* Sources */,
+				22E7F2AE2F512527006743D5 /* Frameworks */,
+				22E7F2AF2F512527006743D5 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				22E7F2B72F512527006743D5 /* TaskHubWidgetExtension */,
+			);
+			name = TaskHubWidgetExtensionExtension;
+			packageProductDependencies = (
+			);
+			productName = TaskHubWidgetExtensionExtension;
+			productReference = 22E7F2B12F512527006743D5 /* TaskHubWidgetExtensionExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -190,6 +302,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 22092D4E2F49022C00F1A70E;
 					};
+					22E7F2B02F512527006743D5 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 22092D4A2F49022C00F1A70E /* Build configuration list for PBXProject "TaskHubMobile" */;
@@ -209,6 +324,7 @@
 				22092D4E2F49022C00F1A70E /* TaskHubMobile */,
 				22092D5B2F49022D00F1A70E /* TaskHubMobileTests */,
 				22092D652F49022E00F1A70E /* TaskHubMobileUITests */,
+				22E7F2B02F512527006743D5 /* TaskHubWidgetExtensionExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -235,6 +351,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		22E7F2AF2F512527006743D5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -242,6 +365,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				223C32442F513FB200B9E082 /* ThemeStore.swift in Sources */,
+				22E7F2AC2F4FEF8E006743D5 /* TaskHubWidget.swift in Sources */,
 				22E7F2A82F4E86F6006743D5 /* MobileTaskDTOs.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -260,6 +385,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		22E7F2AD2F512527006743D5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				223C32422F512F1C00B9E082 /* TaskHubWidget.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -272,6 +405,11 @@
 			isa = PBXTargetDependency;
 			target = 22092D4E2F49022C00F1A70E /* TaskHubMobile */;
 			targetProxy = 22092D672F49022E00F1A70E /* PBXContainerItemProxy */;
+		};
+		22E7F2C62F512528006743D5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 22E7F2B02F512527006743D5 /* TaskHubWidgetExtensionExtension */;
+			targetProxy = 22E7F2C52F512528006743D5 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -408,6 +546,7 @@
 				DEVELOPMENT_TEAM = 9QTQ93J4WV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaskHubMobile/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -441,6 +580,7 @@
 				DEVELOPMENT_TEAM = 9QTQ93J4WV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaskHubMobile/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -547,6 +687,68 @@
 			};
 			name = Release;
 		};
+		22E7F2CA2F512528006743D5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = TaskHubWidgetExtensionExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9QTQ93J4WV;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaskHubWidgetExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TaskHubWidgetExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ie.TaskHubMobile.TaskHubWidgetExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		22E7F2CB2F512528006743D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = TaskHubWidgetExtensionExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9QTQ93J4WV;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TaskHubWidgetExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TaskHubWidgetExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ie.TaskHubMobile.TaskHubWidgetExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -582,6 +784,15 @@
 			buildConfigurations = (
 				22092D772F49022E00F1A70E /* Debug */,
 				22092D782F49022E00F1A70E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		22E7F2C92F512528006743D5 /* Build configuration list for PBXNativeTarget "TaskHubWidgetExtensionExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				22E7F2CA2F512528006743D5 /* Debug */,
+				22E7F2CB2F512528006743D5 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

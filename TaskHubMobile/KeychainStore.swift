@@ -13,7 +13,7 @@ struct KeychainStore {
     let service: String
     let accessGroup: String?
 
-    init(service: String = "com.yourorg.taskhub.tokens", accessGroup: String? = nil) {
+    init(service: String = "com.ie.taskhub.tokens", accessGroup: String? = nil) {
         self.service = service
         self.accessGroup = accessGroup
     }
@@ -75,3 +75,4 @@ struct KeychainStore {
         SecItemDelete(query as CFDictionary)
     }
 }
+

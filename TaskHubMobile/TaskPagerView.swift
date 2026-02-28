@@ -1,6 +1,12 @@
 import SwiftUI
 import SwiftData
 
+enum TaskListScope: Int {
+    case all = 0
+    case work = 1
+    case personal = 2
+}
+
 struct TaskPagerView: View {
     @State private var selection: TaskListScope = .all
     
@@ -31,4 +37,3 @@ struct TaskPagerView: View {
     TaskPagerView()
         .modelContainer(for: TaskItem.self, inMemory: true)
 }
-

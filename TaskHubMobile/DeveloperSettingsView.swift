@@ -8,14 +8,22 @@
 import SwiftUI
 
 struct DeveloperSettingsView: View {
-    @EnvironmentObject private var authStore: AuthStore
-    @EnvironmentObject private var appConfig: AppConfig
-    @EnvironmentObject private var deviceRegistry: DeviceRegistry
+    @EnvironmentObject private var env: DefaultAppEnvironment
+
+    private var authStore: AuthStore { env.authStore }
+    private var appConfig: AppConfig { env.appConfig }
+    private var deviceRegistry: DeviceRegistry { env.deviceRegistry }
+    private var prefersEphemeralBinding: Binding<Bool> {
+        Binding(
+            get: { authStore.prefersEphemeralWebAuthSession },
+            set: { authStore.prefersEphemeralWebAuthSession = $0 }
+        )
+    }
 
     var body: some View {
         Form {
             Section("Auth") {
-                Toggle("Ephemeral Web Auth Session", isOn: $authStore.prefersEphemeralWebAuthSession)
+                Toggle("Ephemeral Web Auth Session", isOn: prefersEphemeralBinding)
             }
             Section("Server") {
                 if let base = appConfig.baseURL {
@@ -49,9 +57,8 @@ struct DeveloperSettingsView: View {
 }
 
 #Preview {
-    NavigationStack { DeveloperSettingsView() }
-        .environmentObject(AppConfig())
-        .environmentObject(AuthStore())
-        .environmentObject(DeviceRegistry(appConfig: AppConfig(), authStore: AuthStore()))
+    NavigationStack {
+        DeveloperSettingsView()
+            .environmentObject(DefaultAppEnvironment())
+    }
 }
-

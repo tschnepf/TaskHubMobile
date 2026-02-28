@@ -10,6 +10,20 @@ import AuthenticationServices
 import Combine
 import UIKit
 
+private enum AuthFlowError: LocalizedError {
+    case noActivePresentationAnchor
+    case unsupportedPlatform
+
+    var errorDescription: String? {
+        switch self {
+        case .noActivePresentationAnchor:
+            return "Unable to start sign-in because no active presentation window is available."
+        case .unsupportedPlatform:
+            return "Web authentication is not supported on this platform."
+        }
+    }
+}
+
 @MainActor
 final class AuthStore: NSObject, ObservableObject {
     @Published private(set) var accessToken: String?
@@ -21,15 +35,20 @@ final class AuthStore: NSObject, ObservableObject {
     private var lastClientID: String?
     private var lastBaseURL: URL?
 
-    private let keychain = KeychainStore(service: "com.yourorg.taskhub.tokens", accessGroup: AppIdentifiers.keychainAccessGroup)
+    private let keychain = KeychainStore(service: "com.ie.taskhub.tokens", accessGroup: AppIdentifiers.keychainAccessGroup)
+    private let defaults = UserDefaults(suiteName: AppConfig.appGroupIdentifier) ?? .standard
 
     private let accessKey = "access_token"
     private let refreshKey = "refresh_token"
     private let expiryKey = "expiry"
+    private let metaCacheKeyPrefix = "auth.meta.cache."
 
     @Published var prefersEphemeralWebAuthSession: Bool = true
     private var lastState: String?
     private var lastVerifier: String?
+    #if canImport(UIKit)
+    private var webAuthPresentationAnchor: ASPresentationAnchor?
+    #endif
 
     override init() {
         super.init()
@@ -62,7 +81,19 @@ final class AuthStore: NSObject, ObservableObject {
     // MARK: - OIDC Sign-In
     func signIn(baseURL: URL) async throws {
         // 1) Fetch /meta to get discovery and client info
-        let meta = try await MobileAPI.fetchMeta(baseURL: baseURL)
+        let canonicalBaseURL = ServerBootstrap.canonicalBaseURL(baseURL) ?? baseURL
+        let meta: ServerMeta
+        do {
+            let fetched = try await MobileAPI.fetchMeta(baseURL: canonicalBaseURL)
+            cacheMeta(fetched, for: canonicalBaseURL)
+            meta = fetched
+        } catch {
+            if let cached = loadCachedMeta(for: canonicalBaseURL) {
+                meta = cached
+            } else {
+                throw error
+            }
+        }
         // API version gating
         let apiVersionString = meta.api_version
         guard let apiVersion = Int(apiVersionString) else {
@@ -74,7 +105,7 @@ final class AuthStore: NSObject, ObservableObject {
         let discovery = try await fetchDiscovery(from: meta.oidc_discovery_url)
         self.lastDiscovery = discovery
         self.lastClientID = meta.oidc_client_id
-        self.lastBaseURL = baseURL
+        self.lastBaseURL = canonicalBaseURL
 
         // 2) Build authorization URL with PKCE, state, nonce
         let verifier = PKCE.generateVerifier()
@@ -216,8 +247,19 @@ final class AuthStore: NSObject, ObservableObject {
 
     // MARK: - Helpers
     private func startWebAuthSession(authURL: URL, callbackScheme: String) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
+        #if canImport(UIKit)
+        guard let presentationAnchor = resolvePresentationAnchor() else {
+            throw AuthFlowError.noActivePresentationAnchor
+        }
+        webAuthPresentationAnchor = presentationAnchor
+        #else
+        throw AuthFlowError.unsupportedPlatform
+        #endif
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
             let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: callbackScheme) { callbackURL, error in
+                #if canImport(UIKit)
+                self.webAuthPresentationAnchor = nil
+                #endif
                 if let error { continuation.resume(throwing: error) }
                 else if let callbackURL { continuation.resume(returning: callbackURL) }
                 else { continuation.resume(throwing: URLError(.badURL)) }
@@ -235,25 +277,55 @@ final class AuthStore: NSObject, ObservableObject {
         components.queryItems = items
         return components.percentEncodedQuery ?? ""
     }
+
+    private func metaCacheKey(for baseURL: URL) -> String {
+        let canonical = ServerBootstrap.canonicalBaseURL(baseURL) ?? baseURL
+        return metaCacheKeyPrefix + canonical.absoluteString
+    }
+
+    private func cacheMeta(_ meta: ServerMeta, for baseURL: URL) {
+        let key = metaCacheKey(for: baseURL)
+        if let data = try? JSONEncoder().encode(meta) {
+            defaults.set(data, forKey: key)
+        }
+    }
+
+    private func loadCachedMeta(for baseURL: URL) -> ServerMeta? {
+        let key = metaCacheKey(for: baseURL)
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(ServerMeta.self, from: data)
+    }
 }
 extension AuthStore: ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if canImport(UIKit)
+        if let anchor = webAuthPresentationAnchor {
+            return anchor
+        }
+        if let window = resolvePresentationAnchor() {
+            return window
+        }
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            return ASPresentationAnchor(windowScene: scene)
+        }
+        return ASPresentationAnchor()
+        #else
+        return ASPresentationAnchor()
+        #endif
+    }
+
+    #if canImport(UIKit)
+    private func resolvePresentationAnchor() -> ASPresentationAnchor? {
         if let window = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .flatMap({ $0.windows })
             .first(where: { $0.isKeyWindow }) {
             return window
         }
-        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
-            let window = UIWindow(windowScene: scene)
-            window.isHidden = false
-            return window
-        }
-        fatalError("No active UIWindowScene available to present web authentication session.")
-        #else
-        fatalError("Unsupported platform: missing UIKit for web authentication presentation anchor.")
-        #endif
+        return UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first
     }
+    #endif
 }
-

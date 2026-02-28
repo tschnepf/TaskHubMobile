@@ -1,4 +1,6 @@
 import Testing
+import Foundation
+import SwiftData
 @testable import TaskHubMobile
 
 struct MobileTaskDecodingTests {
@@ -44,7 +46,7 @@ struct MobileTaskDecodingTests {
         let decoder = JSONDecoder.mobileRFC3339()
         let item = try decoder.decode(MobileTaskDetailDTO.self, from: json)
         #expect(item.id == "1")
-        #expect(item.project == "a1b2c3")
+        #expect(item.projectId == "a1b2c3")
         #expect(item.is_completed == false)
         #expect(item.priority == 3)
     }
@@ -87,5 +89,61 @@ struct MobileTaskDecodingTests {
         let item = try decoder.decode(MobileTaskDetailDTO.self, from: json)
         #expect(item.projectId == "abc-uuid")
         #expect(item.projectName == "ADC")
+    }
+}
+
+struct WorldConsolidationTests {
+
+    @MainActor
+    @Test("AppConfig persists and reloads baseURL")
+    func appConfigPersistsBaseURL() async throws {
+        let url = try #require(URL(string: "https://example.taskhub.local"))
+        let config = AppConfig()
+        config.resetAll()
+        config.setBaseURL(url)
+
+        let reloaded = AppConfig()
+        #expect(reloaded.baseURL == url)
+
+        reloaded.resetAll()
+    }
+
+    @Test("Server base URL canonicalizes API-suffixed URLs")
+    func canonicalizesAPISuffixedBaseURL() async throws {
+        let input = try #require(URL(string: "https://example.taskhub.local/api"))
+        let canonical = try #require(ServerBootstrap.canonicalBaseURL(input))
+        #expect(canonical.absoluteString == "https://example.taskhub.local")
+    }
+
+    @MainActor
+    @Test("DefaultAppEnvironment wires core services once")
+    func defaultEnvironmentWiring() async throws {
+        let schema = Schema([TaskItem.self])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [config])
+
+        let env = DefaultAppEnvironment(modelContainer: container)
+        #expect(env.modelContainer === container)
+        #expect(env.appConfig.baseURL == nil)
+        #expect(env.syncController.lastSync == nil)
+    }
+
+    @MainActor
+    @Test("SyncController conforms to Syncing protocol")
+    func syncControllerConformsToSyncing() async throws {
+        let schema = Schema([TaskItem.self])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [config])
+
+        let appConfig = AppConfig()
+        appConfig.resetAll()
+        let authStore = AuthStore()
+        let controller = SyncController(container: container, appConfig: appConfig, authStore: authStore)
+
+        let syncing: Syncing = controller
+        syncing.stopLiveSyncLoop()
+        #expect(controller.lastSync == nil)
+        #expect(controller.nextAllowedSync == nil)
+        #expect(controller.lastError == nil)
     }
 }
