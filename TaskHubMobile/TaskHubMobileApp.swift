@@ -10,6 +10,7 @@ import SwiftData
 
 protocol Syncing: AnyObject {
     func syncNow()
+    func syncNow(source: SyncTriggerSource)
     func startLiveSyncLoop()
     func stopLiveSyncLoop()
 }
@@ -30,7 +31,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable : Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         Task { @MainActor in
             guard let sync = self.syncController else { completionHandler(.noData); return }
-            sync.syncNow()
+            sync.syncNow(source: .remoteNotification)
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             completionHandler(.newData)
         }

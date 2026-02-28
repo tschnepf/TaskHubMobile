@@ -134,6 +134,10 @@ actor SyncEngine {
                 if let pid = dto.project { current.project = pid; current.projectId = pid }
                 if let pname = dto.project_name { current.projectName = pname }
                 if let area = dto.area { current.areaRaw = area.rawValue }
+                current.priority = dto.priority
+                if let recurrence = dto.recurrence {
+                    current.recurrenceRaw = recurrence.rawValue
+                }
             } else {
                 let item = TaskItem(
                     serverID: dto.id,
@@ -144,7 +148,9 @@ actor SyncEngine {
                     project: dto.project,
                     projectId: dto.project,
                     projectName: dto.project_name,
-                    areaRaw: dto.area?.rawValue
+                    areaRaw: dto.area?.rawValue,
+                    priority: dto.priority,
+                    recurrenceRaw: dto.recurrence?.rawValue
                 )
                 context.insert(item)
             }
@@ -182,6 +188,10 @@ actor SyncEngine {
                     existing.projectId = dto.project
                     if let name = dto.project_name { existing.projectName = name }
                     existing.areaRaw = dto.area?.rawValue
+                    existing.priority = dto.priority
+                    if let recurrence = dto.recurrence {
+                        existing.recurrenceRaw = recurrence.rawValue
+                    }
                 } else {
                     let item = TaskItem(
                         serverID: dto.id,
@@ -192,7 +202,9 @@ actor SyncEngine {
                         project: dto.project,
                         projectId: dto.project,
                         projectName: dto.project_name,
-                        areaRaw: dto.area?.rawValue
+                        areaRaw: dto.area?.rawValue,
+                        priority: dto.priority,
+                        recurrenceRaw: dto.recurrence?.rawValue
                     )
                     context.insert(item)
                 }
@@ -254,6 +266,8 @@ actor SyncEngine {
                 let hasProject = summary["project"] != nil
                 let hasProjectName = summary["project_name"] != nil
                 let hasArea = summary["area"] != nil
+                let hasPriority = summary["priority"] != nil
+                let hasRecurrence = summary["recurrence"] != nil
 
                 var title: String? = nil
                 if case let .string(value)? = summary["title"] {
@@ -329,6 +343,32 @@ actor SyncEngine {
                     }
                 }
 
+                var priorityValue: Int? = nil
+                if let prioritySummary = summary["priority"] {
+                    switch prioritySummary {
+                    case let .number(value):
+                        priorityValue = Int(value)
+                    case let .string(value):
+                        priorityValue = Int(value)
+                    case .null:
+                        priorityValue = nil
+                    default:
+                        break
+                    }
+                }
+
+                var recurrenceValue: String? = nil
+                if let recurrenceSummary = summary["recurrence"] {
+                    switch recurrenceSummary {
+                    case let .string(value):
+                        recurrenceValue = value.lowercased()
+                    case .null:
+                        recurrenceValue = nil
+                    default:
+                        break
+                    }
+                }
+
                 print("[Import] Event type=\(e.event_type) serverID=\(serverID) tombstone=\(e.tombstone) title=\(title ?? "<nil>")")
 
                 if e.tombstone || e.event_type == "task.deleted" || e.event_type.hasSuffix(".deleted") {
@@ -361,6 +401,12 @@ actor SyncEngine {
                     if hasArea {
                         existingTask.areaRaw = areaValue
                     }
+                    if hasPriority {
+                        existingTask.priority = priorityValue
+                    }
+                    if hasRecurrence {
+                        existingTask.recurrenceRaw = recurrenceValue
+                    }
                 } else {
                     let newItem = TaskItem(
                         serverID: serverID,
@@ -371,7 +417,9 @@ actor SyncEngine {
                         project: project,
                         projectId: project,
                         projectName: projectName,
-                        areaRaw: areaValue
+                        areaRaw: areaValue,
+                        priority: priorityValue,
+                        recurrenceRaw: recurrenceValue
                     )
                     context.insert(newItem)
                     tasksByServerID[serverID] = newItem

@@ -1,294 +1,143 @@
-//
-//  ContentView.swift
-//  TaskHubMobile
-//
-//  Created by tim on 2/20/26.
-//
-
 import SwiftUI
 import SwiftData
 
 struct ContentView: View {
     @EnvironmentObject private var env: DefaultAppEnvironment
-    @Environment(\.scenePhase) private var scenePhase
-
-    @State private var newTaskTitle: String = ""
-    @State private var isSigningIn = false
-    @State private var errorMessage: String?
-    @State private var isPresentingErrorAlert: Bool = false
-    @State private var onboardingRequired: Bool = false
-
-    @State private var isPresentingCreateTaskSheet: Bool = false
-    @State private var addSheetTitle: String = ""
-    @State private var addSheetArea: TaskArea = .personal
-    @State private var addSheetPriority: TaskPriority = .three
-    @State private var addSheetProject: String = ""
-    @State private var addSheetHasDueDate: Bool = false
-    @State private var addSheetDueDate: Date = .now
-    @State private var addSheetRepeat: RepeatRule = .none
-
-    @State private var projectSuggestions: [String] = []
-    @State private var suggestionTask: Task<Void, Never>? = nil
-
-    private var appConfig: AppConfig { env.appConfig }
-    private var authStore: AuthStore { env.authStore }
-    private var syncController: SyncController { env.syncController }
-    private var deviceRegistry: DeviceRegistry { env.deviceRegistry }
-    private var networkMonitor: NetworkMonitor { env.networkMonitor }
+    @StateObject private var viewModel = TaskHomeViewModel()
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                TaskPagerView()
-                    .refreshable {
-                        if networkMonitor.isOnline {
-                            syncController.syncNow()
-                        }
+            ZStack(alignment: .top) {
+                LinearGradient(
+                    colors: [DS.Colors.elevated.opacity(0.35), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                VStack(spacing: DS.Spacing.sm) {
+                    header
+                        .padding(.horizontal, DS.Spacing.md)
+                        .padding(.top, DS.Spacing.xs)
+
+                    if env.isOfflineForDisplay {
+                        offlineBanner
+                            .padding(.horizontal, DS.Spacing.md)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                if !networkMonitor.isOnline {
+                    FilterChipBar(selected: viewModel.selectedScope) { scope in
+                        viewModel.setScope(scope)
+                    }
+                    .padding(.horizontal, DS.Spacing.md)
+
+                    TaskListView(scope: viewModel.selectedScope) { message, style in
+                        viewModel.showToast(message, style: style)
+                    }
+                    .environmentObject(env)
+                }
+                .animation(DS.Motion.quick, value: env.isOfflineForDisplay)
+
+                if let toast = viewModel.toast {
                     VStack {
-                        HStack {
-                            Image(systemName: "wifi.slash")
-                            Text("Offline")
-                                .bold()
-                            Spacer()
-                        }
-                        .padding(8)
-                        .background(.orange.opacity(0.2))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .padding()
                         Spacer()
+                        ToastBanner(toast: toast)
+                            .padding(.horizontal, DS.Spacing.md)
+                            .padding(.bottom, DS.Spacing.md)
                     }
-                    .transition(.move(edge: .top))
-                }
-
-                if onboardingRequired {
-                    OnboardingView(message: "Your identity needs to be linked by an administrator before you can sign in.") {
-                        Task { await checkSession() }
-                    }
-                    .background(.ultraThinMaterial)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .navigationTitle("Task Hub")
-            .safeAreaInset(edge: .bottom) {
-                Text("Last Sync: \(syncController.lastSync?.formatted(date: .abbreviated, time: .standard) ?? "Never")")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        syncController.syncNow()
+                        env.syncController.syncNow(source: .manual)
                     } label: {
-                        Label("Sync Now", systemImage: "arrow.clockwise")
+                        Image(systemName: "arrow.clockwise")
                     }
+                    .accessibilityLabel("Sync now")
                 }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        addSheetTitle = ""
-                        isPresentingCreateTaskSheet = true
+                        viewModel.isPresentingQuickAdd = true
                     } label: {
-                        Image(systemName: "plus")
+                        Label("Quick Add", systemImage: "plus.circle.fill")
+                            .labelStyle(.iconOnly)
                     }
-                    .accessibilityLabel("Add Task")
+                    .accessibilityLabel("Quick Add")
+                    .accessibilityIdentifier("home.quickadd")
                 }
+
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(destination: SettingsView()) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
                         Image(systemName: "gearshape")
                     }
-                    .accessibilityLabel("Open Settings")
+                    .accessibilityLabel("Settings")
                 }
             }
-            .onAppear {
-                syncController.startLiveSyncLoop()
-                syncController.syncOnForeground()
-                deviceRegistry.syncRegistrationOnForeground()
-            }
-            .sheet(isPresented: $isPresentingCreateTaskSheet) { createTaskSheet }
-            .alert("Error", isPresented: $isPresentingErrorAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(errorMessage ?? "")
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .active {
-                    syncController.startLiveSyncLoop()
-                    syncController.syncOnForeground()
-                    deviceRegistry.syncRegistrationOnForeground()
-                } else if newPhase == .background {
-                    syncController.stopLiveSyncLoop()
+        }
+        .sheet(isPresented: $viewModel.isPresentingQuickAdd) {
+            QuickAddSheet(
+                onCreated: {
+                    viewModel.showToast("Task added.", style: .success)
+                },
+                onFailed: { message in
+                    viewModel.showToast(message, style: .error)
                 }
+            )
+            .environmentObject(env)
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+                Text("Task Hub")
+                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                SyncStatusPill()
+                    .environmentObject(env)
             }
-            .onChange(of: isPresentingErrorAlert) { _, newValue in
-                if !newValue {
-                    errorMessage = nil
+
+            Spacer()
+
+            if env.authStore.accessToken == nil {
+                Button("Sign In") {
+                    Task {
+                        do {
+                            try await env.signIn()
+                        } catch {
+                            viewModel.showToast(error.localizedDescription, style: .error)
+                        }
+                    }
                 }
+                .buttonStyle(.borderedProminent)
             }
         }
     }
 
-    @ViewBuilder
-    private var createTaskSheet: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text("New Task")) {
-                    TextField("Task title", text: $addSheetTitle)
-                }
-                Section(header: Text("Area")) {
-                    Picker("Area", selection: $addSheetArea) {
-                        Text("Personal").tag(TaskArea.personal)
-                        Text("Work").tag(TaskArea.work)
-                    }
-                    .pickerStyle(.segmented)
-                }
-                Section(header: Text("Priority")) {
-                    Picker("Priority", selection: $addSheetPriority) {
-                        ForEach(TaskPriority.allCases) { p in
-                            Text(p.displayName).tag(p)
-                        }
-                    }
-                }
-                Section(header: Text("Project")) {
-                    TextField("Project (name)", text: $addSheetProject)
-                        .onChange(of: addSheetProject) { _, newValue in
-                            suggestionTask?.cancel()
-                            let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !query.isEmpty else {
-                                projectSuggestions = []
-                                return
-                            }
-                            suggestionTask = Task {
-                                try? await Task.sleep(nanoseconds: 200_000_000)
-                                guard !Task.isCancelled else { return }
-                                let results = await syncController.projectSuggestions(prefix: query)
-                                await MainActor.run { projectSuggestions = results }
-                            }
-                        }
-                    if !projectSuggestions.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(projectSuggestions, id: \.self) { name in
-                                Button(action: {
-                                    addSheetProject = name
-                                    projectSuggestions = []
-                                }) {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "folder")
-                                            .foregroundStyle(.secondary)
-                                        Text(name)
-                                            .foregroundStyle(.primary)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            }
-                        }
-                    }
-                }
-                Section(header: Text("Due Date")) {
-                    Toggle("Has Due Date", isOn: $addSheetHasDueDate)
-                    if addSheetHasDueDate {
-                        DatePicker("Due", selection: $addSheetDueDate, displayedComponents: [.date])
-                    }
-                }
-                Section(header: Text("Repeat")) {
-                    Picker("Repeat", selection: $addSheetRepeat) {
-                        ForEach(RepeatRule.allCases) { r in
-                            Text(r.rawValue.capitalized).tag(r)
-                        }
-                    }
-                }
+    private var offlineBanner: some View {
+        HStack(spacing: DS.Spacing.xs) {
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(DS.Colors.warning)
+            Text("You’re offline. Showing local data.")
+                .font(DS.Typography.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Retry") {
+                env.syncController.syncNow(source: .foreground)
             }
-            .navigationTitle("Add Task")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { isPresentingCreateTaskSheet = false }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        let title = addSheetTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !title.isEmpty else { return }
-                        Task {
-                            do {
-                                try await syncController.createTask(
-                                    title: title,
-                                    area: addSheetArea,
-                                    priority: addSheetPriority,
-                                    projectName: addSheetProject.isEmpty ? nil : addSheetProject,
-                                    dueAt: addSheetHasDueDate ? addSheetDueDate : nil,
-                                    repeatRule: addSheetRepeat
-                                )
-                                addSheetTitle = ""
-                                addSheetArea = .personal
-                                addSheetPriority = .three
-                                addSheetProject = ""
-                                addSheetHasDueDate = false
-                                addSheetDueDate = .now
-                                addSheetRepeat = .none
-                                isPresentingCreateTaskSheet = false
-                                await MainActor.run { projectSuggestions = [] }
-                            } catch {
-                                if let apiErr = error as? APIClientError,
-                                   case let .serverError(_, message, requestID, _) = apiErr {
-                                    if let req = requestID {
-                                        errorMessage = "Create failed: \(message) (req: \(req))"
-                                    } else {
-                                        errorMessage = "Create failed: \(message)"
-                                    }
-                                } else {
-                                    errorMessage = error.localizedDescription
-                                }
-                                isPresentingErrorAlert = true
-                            }
-                        }
-                    }
-                    .disabled(addSheetTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
+            .font(DS.Typography.caption)
         }
-    }
-
-    private func signIn() {
-        guard let base = appConfig.baseURL else { return }
-        appConfig.setBaseURL(base)
-        guard let canonicalBase = appConfig.baseURL else { return }
-        errorMessage = nil
-        isSigningIn = true
-        Task {
-            do {
-                try await authStore.signIn(baseURL: canonicalBase)
-                await checkSession()
-                await MainActor.run {
-                    deviceRegistry.syncRegistrationOnForeground()
-                    syncController.syncNow()
-                }
-                isSigningIn = false
-            } catch {
-                errorMessage = error.localizedDescription
-                isPresentingErrorAlert = true
-                isSigningIn = false
-            }
-        }
-    }
-
-    @MainActor
-    private func checkSession() async {
-        guard let base = appConfig.baseURL, let token = authStore.accessToken else { return }
-        do {
-            _ = try await SessionAPI.checkSession(baseURL: base, token: token)
-            onboardingRequired = false
-            errorMessage = nil
-        } catch {
-            let nsErr = error as NSError
-            if let code = nsErr.userInfo["error.code"] as? String, code == "onboarding_required" {
-                onboardingRequired = true
-            } else {
-                onboardingRequired = false
-                errorMessage = nsErr.localizedDescription
-                isPresentingErrorAlert = true
-            }
-        }
+        .padding(.vertical, DS.Spacing.xs)
+        .padding(.horizontal, DS.Spacing.sm)
+        .background(DS.Colors.warning.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.offlineBanner")
     }
 }
 

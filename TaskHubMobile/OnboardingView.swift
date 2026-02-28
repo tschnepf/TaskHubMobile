@@ -19,12 +19,14 @@ struct OnboardingView: View {
             Text("Onboarding Required")
                 .font(.title2)
                 .bold()
+                .accessibilityIdentifier("onboarding.required.title")
             Text(message)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
             Button("I’ve been onboarded — Try Again", action: retry)
                 .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("onboarding.retry.button")
         }
         .padding()
     }

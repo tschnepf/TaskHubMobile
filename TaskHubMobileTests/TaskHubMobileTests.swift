@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import SwiftData
+import Darwin
 @testable import TaskHubMobile
 
 struct MobileTaskDecodingTests {
@@ -118,6 +119,12 @@ struct WorldConsolidationTests {
     @MainActor
     @Test("DefaultAppEnvironment wires core services once")
     func defaultEnvironmentWiring() async throws {
+        // Ensure persisted defaults/keychain state from prior tests does not leak in.
+        let persistedConfig = AppConfig()
+        persistedConfig.resetAll()
+        let persistedAuth = AuthStore()
+        persistedAuth.clear()
+
         let schema = Schema([TaskItem.self])
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [config])
@@ -138,6 +145,7 @@ struct WorldConsolidationTests {
         let appConfig = AppConfig()
         appConfig.resetAll()
         let authStore = AuthStore()
+        authStore.clear()
         let controller = SyncController(container: container, appConfig: appConfig, authStore: authStore)
 
         let syncing: Syncing = controller
@@ -145,5 +153,108 @@ struct WorldConsolidationTests {
         #expect(controller.lastSync == nil)
         #expect(controller.nextAllowedSync == nil)
         #expect(controller.lastError == nil)
+    }
+}
+
+struct AppUXStateTests {
+
+    @MainActor
+    @Test("UX state is bootstrap when base URL is missing")
+    func uxStateBootstrapWithoutBaseURL() async throws {
+        let env = DefaultAppEnvironment()
+        env.appConfig.resetAll()
+        env.authStore.clear()
+        await env.refreshUXState(forceSessionCheck: false)
+        #expect(env.uxState == .bootstrap)
+    }
+
+    @MainActor
+    @Test("UX state is unauthenticated when base URL exists but no token")
+    func uxStateUnauthenticatedWithBaseURLOnly() async throws {
+        let env = DefaultAppEnvironment()
+        let url = try #require(URL(string: "https://example.taskhub.local"))
+        env.appConfig.setBaseURL(url)
+        env.authStore.clear()
+        await env.refreshUXState(forceSessionCheck: false)
+        #expect(env.uxState == .unauthenticated)
+    }
+
+    @MainActor
+    @Test("UX state is ready in UI test ready scenario")
+    func uxStateReadyInUITestReadyScenario() async throws {
+        let oldMode = getenv("UITEST_MODE").flatMap { String(cString: $0) }
+        let oldScenario = getenv("UITEST_SCENARIO").flatMap { String(cString: $0) }
+        let oldSkip = getenv("UITEST_SKIP_SESSION").flatMap { String(cString: $0) }
+        setenv("UITEST_MODE", "1", 1)
+        setenv("UITEST_SCENARIO", "ready", 1)
+        setenv("UITEST_SKIP_SESSION", "1", 1)
+        defer {
+            restoreEnv("UITEST_MODE", oldMode)
+            restoreEnv("UITEST_SCENARIO", oldScenario)
+            restoreEnv("UITEST_SKIP_SESSION", oldSkip)
+        }
+
+        let env = DefaultAppEnvironment()
+        await env.refreshUXState(forceSessionCheck: false)
+        #expect(env.uxState == .ready)
+    }
+}
+
+struct OptimisticToggleRollbackTests {
+
+    @MainActor
+    @Test("Toggle failure preserves original completion state")
+    func toggleFailurePreservesState() async throws {
+        let oldMode = getenv("UITEST_MODE").flatMap { String(cString: $0) }
+        let oldStub = getenv("UITEST_STUB_MUTATIONS").flatMap { String(cString: $0) }
+        let oldForce = getenv("UITEST_FORCE_TOGGLE_FAILURE").flatMap { String(cString: $0) }
+        setenv("UITEST_MODE", "1", 1)
+        setenv("UITEST_STUB_MUTATIONS", "1", 1)
+        setenv("UITEST_FORCE_TOGGLE_FAILURE", "1", 1)
+        defer {
+            restoreEnv("UITEST_MODE", oldMode)
+            restoreEnv("UITEST_STUB_MUTATIONS", oldStub)
+            restoreEnv("UITEST_FORCE_TOGGLE_FAILURE", oldForce)
+        }
+
+        let schema = Schema([TaskItem.self])
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [config])
+
+        let appConfig = AppConfig()
+        appConfig.setBaseURL(URL(string: "https://example.taskhub.local"))
+        let authStore = AuthStore()
+        authStore.setTestingTokens()
+        let controller = SyncController(container: container, appConfig: appConfig, authStore: authStore)
+
+        let context = ModelContext(container)
+        let task = TaskItem(
+            serverID: "rollback-case",
+            title: "Rollback task",
+            completed: false,
+            updatedAt: Date(),
+            areaRaw: "work"
+        )
+        context.insert(task)
+        try context.save()
+
+        var failed = false
+        do {
+            _ = try await controller.setTaskCompleted(taskID: "rollback-case", completed: true, triggerReconcile: false)
+        } catch {
+            failed = true
+        }
+        #expect(failed)
+
+        let fetched = try context.fetch(FetchDescriptor<TaskItem>())
+        #expect(fetched.first(where: { $0.serverID == "rollback-case" })?.completed == false)
+    }
+}
+
+private func restoreEnv(_ key: String, _ value: String?) {
+    if let value {
+        setenv(key, value, 1)
+    } else {
+        unsetenv(key)
     }
 }

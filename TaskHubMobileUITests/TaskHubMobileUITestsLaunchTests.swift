@@ -20,13 +20,14 @@ final class TaskHubMobileUITestsLaunchTests: XCTestCase {
     @MainActor
     func testLaunch() throws {
         let app = XCUIApplication()
+        app.launchEnvironment["UITEST_MODE"] = "1"
+        app.launchEnvironment["UITEST_SCENARIO"] = "ready"
+        app.launchEnvironment["UITEST_SKIP_SESSION"] = "1"
+        app.launchEnvironment["UITEST_STUB_MUTATIONS"] = "1"
         app.launch()
 
-        // Insert steps here to perform after app launch but before taking a screenshot,
-        // such as logging into a test account or navigating somewhere in the app
-
         let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "Launch Screen"
+        attachment.name = "Ready Home"
         attachment.lifetime = .keepAlways
         add(attachment)
     }

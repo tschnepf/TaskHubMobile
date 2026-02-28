@@ -15,6 +15,21 @@ import CryptoKit
 import UIKit
 #endif
 
+enum SyncTriggerSource: String {
+    case manual
+    case foreground
+    case background
+    case reconcile
+    case remoteNotification
+}
+
+struct TaskCompletionMutationResult {
+    let taskID: String
+    let completed: Bool
+    let updatedAt: Date?
+    let elapsedMs: Int
+}
+
 actor LocalProjectCache {
     private var names: [String] = []
     private let defaults: UserDefaults
@@ -37,13 +52,6 @@ actor LocalProjectCache {
 
     func setProjects(_ input: [String]) async {
         names = Array(Set(input.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
-        save()
-    }
-
-    func addProjects(_ input: [String]) async {
-        let cleaned = input.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        names.append(contentsOf: cleaned)
-        names = Array(Set(names)).sorted()
         save()
     }
 
@@ -82,13 +90,14 @@ final class SyncController: ObservableObject {
         })
     }()
     private let projectCache = LocalProjectCache(suiteName: nil)
-    
+
     private var liveLoopTask: Task<Void, Never>? = nil
     private var authTokenCancellable: AnyCancellable? = nil
     private var stopLoopFlag = false
-    
-    private func getAPIClientForUtilities() async -> APIClient? { await engine?.apiForUtilities() }
-    
+    private var uiTestModeEnabled: Bool { ProcessInfo.processInfo.environment["UITEST_MODE"] == "1" }
+    private var uiTestStubMutationsEnabled: Bool { ProcessInfo.processInfo.environment["UITEST_STUB_MUTATIONS"] == "1" }
+    private var uiTestForceToggleFailure: Bool { ProcessInfo.processInfo.environment["UITEST_FORCE_TOGGLE_FAILURE"] == "1" }
+
     private func refreshProjectsCache() async {
         guard let base = appConfig.baseURL else { return }
         let client = APIClient(baseURLProvider: { base }, authStore: authStore)
@@ -108,13 +117,11 @@ final class SyncController: ObservableObject {
         authTokenCancellable = authStore.$accessToken.sink { [weak self] token in
             guard let self else { return }
             if token == nil {
-                // Signed out: stop loop and clear local state
                 self.stopLiveSyncLoop()
                 Task { await self.engine?.resetLocalState() }
             } else {
-                // Signed in: rebuild engine with namespaced cursor and trigger immediate sync
                 self.rebuildEngineIfPossible()
-                self.triggerImmediateDelta()
+                self.triggerImmediateDelta(source: .reconcile)
             }
         }
     }
@@ -129,7 +136,7 @@ final class SyncController: ObservableObject {
         let ns = computeCursorNamespace()
         engine = SyncEngine(api: client, modelContainer: container, cursorNamespace: ns)
     }
-    
+
     private func computeCursorNamespace() -> String {
         let base = appConfig.baseURL?.absoluteString ?? ""
         let token = authStore.refreshToken ?? "anon"
@@ -166,16 +173,15 @@ final class SyncController: ObservableObject {
         self.lastBackfillAt = now
         return true
     }
-    
+
     func startLiveSyncLoop() {
         guard liveLoopTask == nil else { return }
         stopLoopFlag = false
         liveLoopTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled && !self.stopLoopFlag {
-                // Only attempt when authenticated
                 if self.authStore.accessToken != nil {
-                    self.syncNow()
+                    self.syncNow(source: .background)
                 }
                 let baseInterval = self.preferredLiveSyncInterval()
                 let adaptive = self.backoffSeconds > 0 ? max(baseInterval, self.backoffSeconds) : baseInterval
@@ -192,21 +198,25 @@ final class SyncController: ObservableObject {
         liveLoopTask = nil
     }
 
-    func triggerImmediateDelta() {
-        // Reset backoff and attempt a sync soon
+    func triggerImmediateDelta(source: SyncTriggerSource = .reconcile) {
         backoffSeconds = 0
         nextAllowedSync = Date(timeIntervalSinceNow: 0)
-        syncNow()
+        syncNow(source: source)
     }
 
     func syncNow() {
+        syncNow(source: .manual)
+    }
+
+    func syncNow(source: SyncTriggerSource) {
         if isSyncing { return }
-        // Respect simple backoff window
         if let next = nextAllowedSync, Date() < next { return }
         guard let engine else {
             lastError = "Sync engine unavailable."
             return
         }
+
+        let started = Date()
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -218,13 +228,9 @@ final class SyncController: ObservableObject {
                     self.lastError = nil
                     self.backoffSeconds = 0
                     self.nextAllowedSync = nil
-                    Task { await self.widgetCache.refreshSnapshotIfNeeded(); WidgetCenter.shared.reloadAllTimelines() }
-                    self.writeWidgetSnapshotFromStore()
-                    WidgetCenter.shared.reloadAllTimelines()
-                    Task { await self.refreshProjectsCache() }
-                    if self.shouldRunBackfill() {
-                        Task { await self.backfillMissingAreas(limit: 20) }
-                    }
+                    self.runPostSyncSideEffects()
+                    let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                    os_log("[Sync] Success source=%{public}@ duration_ms=%{public}d", source.rawValue, elapsed)
                 }
             } catch {
                 if case APIClientError.unauthorized = error {
@@ -234,6 +240,7 @@ final class SyncController: ObservableObject {
                         self.authStore.clear()
                     }
                 }
+
                 var retryAfter: TimeInterval? = nil
                 if case let APIClientError.rateLimited(ra) = error { retryAfter = ra }
                 let msg = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
@@ -247,42 +254,67 @@ final class SyncController: ObservableObject {
                         self.backoffSeconds = min((self.backoffSeconds == 0 ? 2 : self.backoffSeconds * 2), self.maxBackoff)
                         self.nextAllowedSync = Date().addingTimeInterval(self.backoffSeconds)
                     }
+                    let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                    os_log("[Sync] Failure source=%{public}@ duration_ms=%{public}d", source.rawValue, elapsed)
                 }
             }
         }
     }
-    
-    func createTask(title: String, area: TaskArea = .personal, priority: TaskPriority? = nil, projectName: String? = nil, dueAt: Date? = nil, repeatRule: RepeatRule? = nil) async throws {
-        guard let engine else { throw NSError(domain: "Sync", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync engine unavailable"]) }
-        struct CreateTaskBody: Encodable { let title: String; let area: TaskArea }
-        // Prepare payload (kept for future engine support of area)
-        let _ = CreateTaskBody(title: title, area: area)
 
-        // Generate a fresh idempotency key for this logical create action
+    private func runPostSyncSideEffects() {
+        writeWidgetSnapshotFromStore()
+        Task { await widgetCache.refreshSnapshotIfNeeded() }
+        WidgetCenter.shared.reloadAllTimelines()
+        Task { await refreshProjectsCache() }
+        if shouldRunBackfill() {
+            Task { await backfillMissingAreas(limit: 20) }
+        }
+    }
+
+    func createTask(title: String, area: TaskArea = .personal, priority: TaskPriority? = nil, projectName: String? = nil, dueAt: Date? = nil, repeatRule: RepeatRule? = nil) async throws {
+        if uiTestModeEnabled && uiTestStubMutationsEnabled {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let item = TaskItem(
+                serverID: "local-\(UUID().uuidString)",
+                title: title,
+                completed: false,
+                updatedAt: Date(),
+                dueAt: dueAt,
+                project: projectName,
+                projectId: projectName?.lowercased(),
+                projectName: projectName,
+                areaRaw: area.rawValue,
+                priority: priority?.rawValue,
+                recurrenceRaw: repeatRule?.rawValue
+            )
+            context.insert(item)
+            try context.save()
+            lastError = nil
+            return
+        }
+
+        guard let engine else { throw NSError(domain: "Sync", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync engine unavailable"]) }
+
+        let started = Date()
         let key = idStore.generate()
         idStore.save(key)
 
         do {
             try await engine.createTask(title: title, area: area, priority: priority, projectName: projectName, dueAt: dueAt, repeatRule: repeatRule, idempotencyKey: key.value)
             idStore.use(key)
-            await MainActor.run { self.lastError = nil }
-            self.triggerImmediateDelta()
+            await MainActor.run {
+                self.lastError = nil
+                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                os_log("[CreateTask] Success duration_ms=%{public}d", elapsed)
+            }
+            triggerImmediateDelta(source: .reconcile)
         } catch {
-            await MainActor.run { self.lastError = error.localizedDescription }
-            throw error
-        }
-    }
-    
-    func createTaskResolvingProject(title: String, area: TaskArea = .personal, priority: TaskPriority? = nil, projectName: String?, dueAt: Date? = nil, repeatRule: RepeatRule? = nil) async throws {
-        guard let engine else { throw NSError(domain: "Sync", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync engine unavailable"]) }
-
-        let key = idStore.generate(); idStore.save(key)
-        do {
-            try await engine.createTask(title: title, area: area, priority: priority, projectName: projectName, dueAt: dueAt, repeatRule: repeatRule, idempotencyKey: key.value)
-            idStore.use(key)
-            await MainActor.run { self.lastError = nil }
-        } catch {
-            await MainActor.run { self.lastError = error.localizedDescription }
+            await MainActor.run {
+                self.lastError = error.localizedDescription
+                let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+                os_log("[CreateTask] Failure duration_ms=%{public}d", elapsed)
+            }
             throw error
         }
     }
@@ -299,19 +331,37 @@ final class SyncController: ObservableObject {
     }
 
     func syncOnForeground() {
-        syncNow()
+        syncNow(source: .foreground)
     }
 
     func refreshWidgetSnapshot() {
-        self.writeWidgetSnapshotFromStore()
+        writeWidgetSnapshotFromStore()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    func setTaskCompleted(taskID: String, completed: Bool) async throws {
+    func setTaskCompleted(taskID: String, completed: Bool, triggerReconcile: Bool = false) async throws -> TaskCompletionMutationResult {
+        if uiTestModeEnabled && uiTestStubMutationsEnabled {
+            if uiTestForceToggleFailure {
+                throw NSError(domain: "UITest", code: -1, userInfo: [NSLocalizedDescriptionKey: "Simulated completion failure"])
+            }
+            let started = Date()
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            if let item = all.first(where: { $0.serverID == taskID }) {
+                item.completed = completed
+                item.updatedAt = Date()
+                try context.save()
+            }
+            let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+            return TaskCompletionMutationResult(taskID: taskID, completed: completed, updatedAt: Date(), elapsedMs: elapsed)
+        }
+
         guard let base = appConfig.baseURL else {
             throw APIClientError.missingBaseURL
         }
 
+        let started = Date()
         let client = APIClient(baseURLProvider: { base }, authStore: authStore)
         let updated = try await client.updateTask(id: taskID, title: nil, completed: completed, dueAt: nil)
 
@@ -319,33 +369,77 @@ final class SyncController: ObservableObject {
         context.autosaveEnabled = false
         let all = try context.fetch(FetchDescriptor<TaskItem>())
         if let item = all.first(where: { $0.serverID == taskID }) {
-            item.completed = updated.is_completed
-            if let updatedAt = updated.updated_at {
-                item.updatedAt = updatedAt
-            } else {
-                item.updatedAt = Date()
-            }
-            item.dueAt = updated.due_at
-            item.project = updated.projectId
-            item.projectId = updated.projectId
-            item.projectName = updated.projectName
-            if let area = updated.area {
-                switch area {
-                case .personal:
-                    item.areaRaw = "personal"
-                case .work:
-                    item.areaRaw = "work"
-                case .unknown(let value):
-                    item.areaRaw = value.lowercased()
-                }
-            }
+            apply(detail: updated, to: item)
             try context.save()
         }
 
         lastError = nil
-        triggerImmediateDelta()
+        if triggerReconcile {
+            syncNow(source: .reconcile)
+        }
+
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        os_log("[ToggleTask] task=%{public}@ completed=%{public}@ duration_ms=%{public}d", taskID, completed.description, elapsed)
+        return TaskCompletionMutationResult(taskID: taskID, completed: completed, updatedAt: updated.updated_at, elapsedMs: elapsed)
     }
-    
+
+    func deferTaskDueDate(taskID: String, currentDueAt: Date?) async throws {
+        if uiTestModeEnabled && uiTestStubMutationsEnabled {
+            let baseDate = currentDueAt ?? Date()
+            let deferred = Calendar.current.date(byAdding: .day, value: 1, to: baseDate) ?? baseDate.addingTimeInterval(24 * 60 * 60)
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let all = try context.fetch(FetchDescriptor<TaskItem>())
+            if let item = all.first(where: { $0.serverID == taskID }) {
+                item.dueAt = deferred
+                item.updatedAt = Date()
+                try context.save()
+            }
+            lastError = nil
+            return
+        }
+
+        guard let base = appConfig.baseURL else {
+            throw APIClientError.missingBaseURL
+        }
+        let baseDate = currentDueAt ?? Date()
+        let deferred = Calendar.current.date(byAdding: .day, value: 1, to: baseDate) ?? baseDate.addingTimeInterval(24 * 60 * 60)
+
+        let client = APIClient(baseURLProvider: { base }, authStore: authStore)
+        let updated = try await client.updateTask(id: taskID, title: nil, completed: nil, dueAt: deferred)
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let all = try context.fetch(FetchDescriptor<TaskItem>())
+        if let item = all.first(where: { $0.serverID == taskID }) {
+            apply(detail: updated, to: item)
+            try context.save()
+        }
+        lastError = nil
+    }
+
+    private func apply(detail: MobileTaskDetailDTO, to item: TaskItem) {
+        item.title = detail.title
+        item.completed = detail.is_completed
+        item.updatedAt = detail.updated_at ?? Date()
+        item.dueAt = detail.due_at
+        item.project = detail.projectId
+        item.projectId = detail.projectId
+        item.projectName = detail.projectName
+        item.priority = detail.priority
+        item.recurrenceRaw = detail.recurrence?.rawValue
+        if let area = detail.area {
+            switch area {
+            case .personal:
+                item.areaRaw = "personal"
+            case .work:
+                item.areaRaw = "work"
+            case .unknown(let value):
+                item.areaRaw = value.lowercased()
+            }
+        }
+    }
+
     private func backfillMissingAreas(limit: Int = 50) async {
         let context = ModelContext(container)
         context.autosaveEnabled = false
@@ -368,6 +462,8 @@ final class SyncController: ObservableObject {
                         case .work: item.areaRaw = "work"
                         case .unknown(let s): item.areaRaw = s.lowercased()
                         }
+                        item.priority = detail.priority
+                        item.recurrenceRaw = detail.recurrence?.rawValue
                         try? context.save()
                     }
                 } catch {
@@ -378,7 +474,7 @@ final class SyncController: ObservableObject {
             // Ignore fetch failures
         }
     }
-    
+
     // MARK: - Widget Snapshot Writing
     private func widgetSnapshotURL() -> URL? {
         guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: AppIdentifiers.appGroupID) else { return nil }
@@ -388,7 +484,6 @@ final class SyncController: ObservableObject {
     }
 
     private func writeWidgetSnapshotFromStore(limit: Int = 7) {
-        // Build a throwaway ModelContext to perform a read-only fetch
         let context = ModelContext(container)
         context.autosaveEnabled = false
         do {
@@ -402,7 +497,9 @@ final class SyncController: ObservableObject {
             let items = try context.fetch(descriptor)
             struct OutItem: Codable {
                 enum CodingKeys: String, CodingKey { case title, isCompleted = "is_completed", dueAt = "due_at" }
-                let title: String; let isCompleted: Bool; let dueAt: Date?
+                let title: String
+                let isCompleted: Bool
+                let dueAt: Date?
             }
             struct OutSnapshot: Codable { let count: Int; let tasks: [OutItem] }
             let mapped = items.map { OutItem(title: $0.title, isCompleted: $0.completed, dueAt: $0.dueAt) }
@@ -415,7 +512,7 @@ final class SyncController: ObservableObject {
             // Ignore snapshot write errors; widget will show placeholder or empty state
         }
     }
-    
+
     deinit {
         liveLoopTask?.cancel()
         authTokenCancellable?.cancel()

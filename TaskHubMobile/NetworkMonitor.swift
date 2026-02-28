@@ -37,4 +37,10 @@ final class NetworkMonitor: ObservableObject {
     deinit {
         monitor.cancel()
     }
+
+    #if DEBUG
+    func setTestingOnline(_ online: Bool) {
+        isOnline = online
+    }
+    #endif
 }

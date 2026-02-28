@@ -53,6 +53,17 @@ enum MobileTaskRecurrence: Decodable, Equatable {
         default: self = .unknown(raw)
         }
     }
+
+    var rawValue: String {
+        switch self {
+        case .none: return "none"
+        case .daily: return "daily"
+        case .weekly: return "weekly"
+        case .monthly: return "monthly"
+        case .yearly: return "yearly"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 enum MobileTaskIntent: Decodable, Equatable {

@@ -78,6 +78,12 @@ final class AuthStore: NSObject, ObservableObject {
         keychain.remove(for: expiryKey)
     }
 
+    #if DEBUG
+    func setTestingTokens(access: String = "test-access", refresh: String = "test-refresh", expiresIn: Int = 3600) {
+        storeTokens(access: access, refresh: refresh, expiresIn: expiresIn)
+    }
+    #endif
+
     // MARK: - OIDC Sign-In
     func signIn(baseURL: URL) async throws {
         // 1) Fetch /meta to get discovery and client info

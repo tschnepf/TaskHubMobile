@@ -10,8 +10,6 @@ struct SettingsView: View {
 
     private var appConfig: AppConfig { env.appConfig }
     private var authStore: AuthStore { env.authStore }
-    private var syncController: SyncController { env.syncController }
-    private var deviceRegistry: DeviceRegistry { env.deviceRegistry }
 
     var body: some View {
         Form {
@@ -27,9 +25,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Button("Change Server", role: .destructive) {
-                    appConfig.resetAll()
-                    authStore.clear()
-                    syncController.forceFullResync()
+                    env.clearServerAndSession()
                 }
             }
 
@@ -44,7 +40,7 @@ struct SettingsView: View {
                     Button(role: .destructive) {
                         isSigningOut = true
                         Task {
-                            await authStore.logout(revocationEndpoint: nil)
+                            await env.signOut()
                             await MainActor.run { isSigningOut = false }
                         }
                     } label: {
@@ -85,17 +81,13 @@ struct SettingsView: View {
     }
 
     private func signIn() {
-        guard let base = appConfig.baseURL else { return }
-        appConfig.setBaseURL(base)
-        guard let canonicalBase = appConfig.baseURL else { return }
+        guard appConfig.baseURL != nil else { return }
         signInErrorMessage = nil
         isSigningIn = true
         Task {
             do {
-                try await authStore.signIn(baseURL: canonicalBase)
+                try await env.signIn()
                 await MainActor.run {
-                    deviceRegistry.syncRegistrationOnForeground()
-                    syncController.syncNow()
                     isSigningIn = false
                 }
             } catch {

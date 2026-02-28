@@ -22,6 +22,7 @@ struct BootstrapView: View {
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
+                        .accessibilityIdentifier("bootstrap.url")
                 }
 
                 if let meta {
@@ -48,6 +49,7 @@ struct BootstrapView: View {
                         }
                     }
                     .disabled(isLoading)
+                    .accessibilityIdentifier("bootstrap.connect")
                 }
             }
             .navigationTitle("Connect to Task Hub")

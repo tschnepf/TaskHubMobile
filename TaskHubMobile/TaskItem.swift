@@ -19,8 +19,22 @@ final class TaskItem {
     var projectId: String?
     var projectName: String?
     var areaRaw: String?
+    var priority: Int?
+    var recurrenceRaw: String?
 
-    init(serverID: String, title: String, completed: Bool, updatedAt: Date, dueAt: Date? = nil, project: String? = nil, projectId: String? = nil, projectName: String? = nil, areaRaw: String? = nil) {
+    init(
+        serverID: String,
+        title: String,
+        completed: Bool,
+        updatedAt: Date,
+        dueAt: Date? = nil,
+        project: String? = nil,
+        projectId: String? = nil,
+        projectName: String? = nil,
+        areaRaw: String? = nil,
+        priority: Int? = nil,
+        recurrenceRaw: String? = nil
+    ) {
         self.serverID = serverID
         self.title = title
         self.completed = completed
@@ -30,5 +44,30 @@ final class TaskItem {
         self.projectId = projectId
         self.projectName = projectName
         self.areaRaw = areaRaw
+        self.priority = priority
+        self.recurrenceRaw = recurrenceRaw
+    }
+}
+
+extension TaskItem {
+    var normalizedArea: TaskArea? {
+        switch (areaRaw ?? "").lowercased() {
+        case TaskArea.work.rawValue:
+            return .work
+        case TaskArea.personal.rawValue:
+            return .personal
+        default:
+            return nil
+        }
+    }
+
+    var repeatRule: RepeatRule? {
+        guard let recurrenceRaw else { return nil }
+        return RepeatRule(rawValue: recurrenceRaw.lowercased())
+    }
+
+    var priorityLabel: String? {
+        guard let priority, (1...5).contains(priority) else { return nil }
+        return "P\(priority)"
     }
 }
