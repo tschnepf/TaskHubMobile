@@ -231,12 +231,12 @@ struct TaskCardRow: View {
         return due < Calendar.current.startOfDay(for: Date()) && !isCompleted
     }
 
+    private var cardTintOpacity: Double {
+        isCompleted ? 0.06 : 0.14
+    }
+
     var body: some View {
         HStack(spacing: DS.Spacing.sm) {
-            RoundedRectangle(cornerRadius: DS.Radius.pill)
-                .fill(areaColor.opacity(isCompleted ? 0.28 : 0.9))
-                .frame(width: 5)
-
             VStack(alignment: .leading, spacing: DS.Spacing.xs) {
                 HStack(alignment: .top, spacing: DS.Spacing.sm) {
                     completionButton
@@ -278,11 +278,17 @@ struct TaskCardRow: View {
         }
         .padding(.vertical, DS.Spacing.sm)
         .padding(.horizontal, DS.Spacing.sm)
-        .background(DS.Colors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .fill(DS.Colors.surface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .fill(areaColor.opacity(cardTintOpacity))
+                }
+        }
         .overlay {
             RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                .stroke(areaColor.opacity(isCompleted ? 0.14 : 0.22), lineWidth: 1)
         }
         .accessibilityIdentifier("task.row.\(task.serverID)")
         .animation(DS.Motion.quick, value: isCompleted)
