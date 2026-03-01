@@ -14,6 +14,7 @@ struct TaskHubProgressSnapshot: Equatable {
 @MainActor
 final class LiveActivityCoordinator {
     private let modelContainer: ModelContainer
+    private var isEnabled: Bool = true
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -22,8 +23,22 @@ final class LiveActivityCoordinator {
     func refresh(syncState: TaskHubLiveSyncState) {
         #if canImport(ActivityKit)
         guard #available(iOS 16.2, *) else { return }
+        guard isEnabled else {
+            Task { await self.endAllActivities() }
+            return
+        }
         Task {
             await self.refreshActivity(syncState: syncState)
+        }
+        #endif
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        isEnabled = enabled
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.2, *) else { return }
+        if !enabled {
+            Task { await self.endAllActivities() }
         }
         #endif
     }
@@ -53,6 +68,13 @@ final class LiveActivityCoordinator {
 
     #if canImport(ActivityKit)
     @available(iOS 16.2, *)
+    private func endAllActivities() async {
+        for activity in Activity<TaskHubProgressAttributes>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+    }
+
+    @available(iOS 16.2, *)
     private func refreshActivity(syncState: TaskHubLiveSyncState) async {
         let context = ModelContext(modelContainer)
         context.autosaveEnabled = false
@@ -73,9 +95,7 @@ final class LiveActivityCoordinator {
         }
 
         if snapshot.remainingCount == 0 && snapshot.completedToday == 0 {
-            for activity in Activity<TaskHubProgressAttributes>.activities {
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
+            await endAllActivities()
             return
         }
 

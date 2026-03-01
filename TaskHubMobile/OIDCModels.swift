@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct OIDCDiscovery: Decodable {
+struct OIDCDiscovery: Codable {
     let authorization_endpoint: URL
     let token_endpoint: URL
     let revocation_endpoint: URL?

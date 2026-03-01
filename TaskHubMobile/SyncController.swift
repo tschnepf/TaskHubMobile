@@ -107,6 +107,7 @@ final class SyncController: ObservableObject {
         self.container = container
         self.appConfig = appConfig
         self.authStore = authStore
+        liveActivityCoordinator.setEnabled(appConfig.liveActivitiesEnabled)
         rebuildEngineIfPossible()
         authTokenCancellable = authStore.$accessToken.sink { [weak self] token in
             guard let self else { return }
@@ -346,6 +347,13 @@ final class SyncController: ObservableObject {
 
     private func refreshLiveActivity(syncState: TaskHubLiveSyncState) {
         liveActivityCoordinator.refresh(syncState: syncState)
+    }
+
+    func setLiveActivitiesEnabled(_ enabled: Bool) {
+        liveActivityCoordinator.setEnabled(enabled)
+        if enabled {
+            refreshLiveActivity(syncState: .upToDate)
+        }
     }
 
     private func refreshWidgetAndLiveAfterMutation() {

@@ -89,7 +89,7 @@ final class DefaultAppEnvironment: ObservableObject {
         bindChildPublishers()
         bindStatePublishers()
 
-        Task { await refreshUXState(forceSessionCheck: true) }
+        Task { await refreshUXState(forceSessionCheck: false) }
     }
 
     func clearStartupWarning() {
@@ -142,6 +142,11 @@ final class DefaultAppEnvironment: ObservableObject {
         lastSessionError = nil
         syncController.forceFullResync()
         Task { await refreshUXState(forceSessionCheck: false) }
+    }
+
+    func setLockScreenTasksEnabled(_ enabled: Bool) {
+        appConfig.setLiveActivitiesEnabled(enabled)
+        syncController.setLiveActivitiesEnabled(enabled)
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -212,7 +217,9 @@ final class DefaultAppEnvironment: ObservableObject {
 
         let shouldCheckSession = forceSessionCheck || token != lastSessionToken || sessionCheckIsStale()
         if shouldCheckSession && networkMonitor.isOnline {
-            setUXContext(state: .loading, message: "Checking account status…")
+            if uxContext.state == .loading {
+                setUXContext(state: .ready, message: nil)
+            }
             do {
                 guard let base = appConfig.baseURL else {
                     setUXContext(state: .bootstrap, message: nil)
@@ -232,11 +239,36 @@ final class DefaultAppEnvironment: ObservableObject {
                     lastSessionToken = token
                     lastSessionCheckAt = Date()
                 } else if nsErr.code == 401 {
-                    authStore.clear()
-                    onboardingRequired = false
-                    lastSessionError = nil
-                    setUXContext(state: .unauthenticated, message: nil)
-                    return
+                    await authStore.refresh()
+                    guard let base = appConfig.baseURL else {
+                        setUXContext(state: .bootstrap, message: nil)
+                        return
+                    }
+                    guard let refreshedToken = authStore.accessToken, !refreshedToken.isEmpty else {
+                        authStore.clear()
+                        onboardingRequired = false
+                        lastSessionError = nil
+                        setUXContext(state: .unauthenticated, message: nil)
+                        return
+                    }
+                    do {
+                        _ = try await SessionAPI.checkSession(baseURL: base, token: refreshedToken)
+                        onboardingRequired = false
+                        lastSessionError = nil
+                        lastSessionToken = refreshedToken
+                        lastSessionCheckAt = Date()
+                    } catch {
+                        let retryError = error as NSError
+                        if retryError.code == 401 {
+                            authStore.clear()
+                            onboardingRequired = false
+                            lastSessionError = nil
+                            setUXContext(state: .unauthenticated, message: nil)
+                            return
+                        }
+                        onboardingRequired = false
+                        lastSessionError = retryError.localizedDescription
+                    }
                 } else {
                     onboardingRequired = false
                     lastSessionError = nsErr.localizedDescription
@@ -480,14 +512,14 @@ struct RootView: View {
         .onAppear {
             env.syncController.startLiveSyncLoop()
             env.fetchMobilePreferencesOnLaunch()
-            Task { await env.refreshUXState(forceSessionCheck: true) }
+            Task { await env.refreshUXState(forceSessionCheck: false) }
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 env.syncController.startLiveSyncLoop()
                 env.syncController.syncOnForeground()
                 env.deviceRegistry.syncRegistrationOnForeground()
-                Task { await env.refreshUXState(forceSessionCheck: true) }
+                Task { await env.refreshUXState(forceSessionCheck: false) }
             } else if newPhase == .background {
                 env.syncController.stopLiveSyncLoop()
             }

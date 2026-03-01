@@ -14,8 +14,10 @@ import SwiftUI
 @MainActor
 final class AppConfig: ObservableObject {
     @Published var baseURL: URL?
+    @Published var liveActivitiesEnabled: Bool
 
     private let baseURLKey = "AppConfig.baseURL"
+    private let liveActivitiesEnabledKey = "AppConfig.liveActivitiesEnabled"
 
     /// Set this to your actual App Group identifier when entitlements are configured.
     /// If the suite cannot be opened (e.g., entitlements not yet set), we fall back to standard UserDefaults.
@@ -39,6 +41,12 @@ final class AppConfig: ObservableObject {
         } else {
             self.baseURL = nil
         }
+        if let stored = defaults.object(forKey: liveActivitiesEnabledKey) as? Bool {
+            self.liveActivitiesEnabled = stored
+        } else {
+            self.liveActivitiesEnabled = true
+            defaults.set(true, forKey: liveActivitiesEnabledKey)
+        }
     }
 
     /// Persist (or clear) the base URL.
@@ -50,6 +58,11 @@ final class AppConfig: ObservableObject {
             baseURL = nil
             defaults.removeObject(forKey: baseURLKey)
         }
+    }
+
+    func setLiveActivitiesEnabled(_ enabled: Bool) {
+        liveActivitiesEnabled = enabled
+        defaults.set(enabled, forKey: liveActivitiesEnabledKey)
     }
 
     /// Clears all persisted app configuration and resets in-memory state.

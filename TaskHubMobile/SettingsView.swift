@@ -11,6 +11,12 @@ struct SettingsView: View {
 
     private var appConfig: AppConfig { env.appConfig }
     private var authStore: AuthStore { env.authStore }
+    private var lockScreenTasksBinding: Binding<Bool> {
+        Binding(
+            get: { appConfig.liveActivitiesEnabled },
+            set: { env.setLockScreenTasksEnabled($0) }
+        )
+    }
 
     var body: some View {
         Form {
@@ -75,6 +81,10 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+            }
+
+            Section("Lock Screen") {
+                Toggle("Show Tasks on Lock Screen", isOn: lockScreenTasksBinding)
             }
 
             Section("Tools") {

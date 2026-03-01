@@ -39,6 +39,7 @@ final class AuthStore: NSObject, ObservableObject {
     private var lastDiscovery: OIDCDiscovery?
     private var lastClientID: String?
     private var lastBaseURL: URL?
+    private var refreshTask: Task<Void, Never>?
 
     private let keychain = KeychainStore(service: "com.ie.taskhub.tokens", accessGroup: AppIdentifiers.keychainAccessGroup)
     private let defaults = UserDefaults(suiteName: AppConfig.appGroupIdentifier) ?? .standard
@@ -47,8 +48,12 @@ final class AuthStore: NSObject, ObservableObject {
     private let refreshKey = "refresh_token"
     private let expiryKey = "expiry"
     private let metaCacheKeyPrefix = "auth.meta.cache."
+    private let authBaseURLKey = "auth.context.base_url"
+    private let authClientIDKey = "auth.context.client_id"
+    private let authDiscoveryKey = "auth.context.discovery"
+    private let appConfigBaseURLKey = "AppConfig.baseURL"
 
-    @Published var prefersEphemeralWebAuthSession: Bool = true
+    @Published var prefersEphemeralWebAuthSession: Bool = false
     private var lastState: String?
     private var lastVerifier: String?
     #if canImport(UIKit)
@@ -63,6 +68,7 @@ final class AuthStore: NSObject, ObservableObject {
         if let data = try? keychain.data(for: expiryKey), let s = String(data: data, encoding: .utf8), let t = TimeInterval(s) {
             expiryDate = Date(timeIntervalSince1970: t)
         }
+        restoreAuthContext()
     }
 
     func storeTokens(access: String, refresh: String?, expiresIn: Int) {
@@ -75,12 +81,20 @@ final class AuthStore: NSObject, ObservableObject {
     }
 
     func clear() {
+        refreshTask?.cancel()
+        refreshTask = nil
         accessToken = nil
         refreshToken = nil
         expiryDate = nil
+        lastDiscovery = nil
+        lastClientID = nil
+        lastBaseURL = nil
         keychain.remove(for: accessKey)
         keychain.remove(for: refreshKey)
         keychain.remove(for: expiryKey)
+        defaults.removeObject(forKey: authBaseURLKey)
+        defaults.removeObject(forKey: authClientIDKey)
+        defaults.removeObject(forKey: authDiscoveryKey)
     }
 
     #if DEBUG
@@ -114,9 +128,7 @@ final class AuthStore: NSObject, ObservableObject {
             throw NSError(domain: "Auth", code: -10, userInfo: [NSLocalizedDescriptionKey: "Incompatible server API version (\(apiVersion)). Please update the app or contact your administrator."])
         }
         let discovery = try await fetchDiscovery(from: meta.oidc_discovery_url)
-        self.lastDiscovery = discovery
-        self.lastClientID = meta.oidc_client_id
-        self.lastBaseURL = canonicalBaseURL
+        updateAuthContext(discovery: discovery, clientID: meta.oidc_client_id, baseURL: canonicalBaseURL)
 
         // 2) Build authorization URL with PKCE, state, nonce
         let verifier = PKCE.generateVerifier()
@@ -234,44 +246,17 @@ final class AuthStore: NSObject, ObservableObject {
     }
 
     func refresh() async {
-        guard let refreshToken else { return }
-        do {
-            // Ensure we have discovery/clientID; if not, fetch from /meta
-            var discovery = self.lastDiscovery
-            var clientID = self.lastClientID
-            if discovery == nil || clientID == nil {
-                if let base = lastBaseURL {
-                    let meta = try await MobileAPI.fetchMeta(baseURL: base)
-                    discovery = try await fetchDiscovery(from: meta.oidc_discovery_url)
-                    clientID = meta.oidc_client_id
-                    self.lastDiscovery = discovery
-                    self.lastClientID = clientID
-                }
-            }
-            guard let discovery, let clientID else { return }
-
-            var req = URLRequest(url: discovery.token_endpoint)
-            req.httpMethod = "POST"
-            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            let bodyItems: [URLQueryItem] = [
-                URLQueryItem(name: "grant_type", value: "refresh_token"),
-                URLQueryItem(name: "refresh_token", value: refreshToken),
-                URLQueryItem(name: "client_id", value: clientID)
-            ]
-            req.httpBody = Self.formURLEncoded(bodyItems).data(using: .utf8)
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse else { return }
-            if (200...299).contains(http.statusCode) {
-                let decoder = JSONDecoder()
-                let token = try decoder.decode(TokenResponse.self, from: data)
-                storeTokens(access: token.access_token, refresh: token.refresh_token ?? refreshToken, expiresIn: token.expires_in)
-            } else {
-                // Treat as invalid_grant or server error; clear tokens to force re-auth
-                clear()
-            }
-        } catch {
-            // On network or decoding errors, do not clear immediately; leave current token and allow retry later
+        if let refreshTask {
+            await refreshTask.value
+            return
         }
+        let task: Task<Void, Never> = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRefresh()
+        }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
     }
 
     func logout(revocationEndpoint: URL?) async {
@@ -322,6 +307,68 @@ final class AuthStore: NSObject, ObservableObject {
         return components.percentEncodedQuery ?? ""
     }
 
+    private func performRefresh() async {
+        guard let refreshToken else { return }
+        do {
+            // Ensure we have discovery/clientID; if not, fetch from /meta.
+            var discovery = self.lastDiscovery
+            var clientID = self.lastClientID
+            var base = self.lastBaseURL
+            if base == nil {
+                base = loadPersistedBaseURL()
+                self.lastBaseURL = base
+            }
+            if discovery == nil || clientID == nil {
+                if let base {
+                    let meta = try await MobileAPI.fetchMeta(baseURL: base)
+                    let fetchedDiscovery = try await fetchDiscovery(from: meta.oidc_discovery_url)
+                    discovery = fetchedDiscovery
+                    clientID = meta.oidc_client_id
+                    updateAuthContext(discovery: fetchedDiscovery, clientID: meta.oidc_client_id, baseURL: base)
+                }
+            }
+            guard let discovery, let clientID else { return }
+
+            var req = URLRequest(url: discovery.token_endpoint)
+            req.httpMethod = "POST"
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            let bodyItems: [URLQueryItem] = [
+                URLQueryItem(name: "grant_type", value: "refresh_token"),
+                URLQueryItem(name: "refresh_token", value: refreshToken),
+                URLQueryItem(name: "client_id", value: clientID)
+            ]
+            req.httpBody = Self.formURLEncoded(bodyItems).data(using: .utf8)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse else { return }
+            if (200...299).contains(http.statusCode) {
+                let decoder = JSONDecoder()
+                let token = try decoder.decode(TokenResponse.self, from: data)
+                storeTokens(access: token.access_token, refresh: token.refresh_token ?? refreshToken, expiresIn: token.expires_in)
+            } else if shouldClearTokensAfterRefreshFailure(statusCode: http.statusCode, body: data) {
+                clear()
+            }
+        } catch {
+            // On network or decoding errors, do not clear immediately; leave current token and allow retry later.
+        }
+    }
+
+    private func shouldClearTokensAfterRefreshFailure(statusCode: Int, body: Data) -> Bool {
+        guard (400...499).contains(statusCode) else { return false }
+        guard let oauthError = try? JSONDecoder().decode(OAuthErrorResponse.self, from: body) else {
+            return statusCode == 400 || statusCode == 401
+        }
+        let code = (oauthError.error ?? "").lowercased()
+        if code == "invalid_grant" || code == "invalid_token" {
+            return true
+        }
+        let description = (oauthError.error_description ?? "").lowercased()
+        if description.contains("invalid_grant") || description.contains("invalid refresh token") {
+            return true
+        }
+        return false
+    }
+
     private func shouldFallbackToCachedMeta(after error: Error) -> Bool {
         let nsError = error as NSError
         if nsError.userInfo["http.status"] != nil {
@@ -366,6 +413,54 @@ final class AuthStore: NSObject, ObservableObject {
         let key = metaCacheKey(for: baseURL)
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(ServerMeta.self, from: data)
+    }
+
+    private func updateAuthContext(discovery: OIDCDiscovery, clientID: String, baseURL: URL) {
+        lastDiscovery = discovery
+        lastClientID = clientID
+        lastBaseURL = baseURL
+        persistAuthContext()
+    }
+
+    private func persistAuthContext() {
+        if let lastBaseURL {
+            defaults.set(lastBaseURL.absoluteString, forKey: authBaseURLKey)
+        } else {
+            defaults.removeObject(forKey: authBaseURLKey)
+        }
+        if let lastClientID {
+            defaults.set(lastClientID, forKey: authClientIDKey)
+        } else {
+            defaults.removeObject(forKey: authClientIDKey)
+        }
+        if let lastDiscovery, let data = try? JSONEncoder().encode(lastDiscovery) {
+            defaults.set(data, forKey: authDiscoveryKey)
+        } else {
+            defaults.removeObject(forKey: authDiscoveryKey)
+        }
+    }
+
+    private func restoreAuthContext() {
+        lastBaseURL = loadPersistedBaseURL()
+        lastClientID = defaults.string(forKey: authClientIDKey)
+        if let data = defaults.data(forKey: authDiscoveryKey),
+           let discovery = try? JSONDecoder().decode(OIDCDiscovery.self, from: data) {
+            lastDiscovery = discovery
+        }
+    }
+
+    private func loadPersistedBaseURL() -> URL? {
+        if let raw = defaults.string(forKey: authBaseURLKey),
+           let url = URL(string: raw),
+           let canonical = ServerBootstrap.canonicalBaseURL(url) {
+            return canonical
+        }
+        if let raw = defaults.string(forKey: appConfigBaseURLKey),
+           let url = URL(string: raw),
+           let canonical = ServerBootstrap.canonicalBaseURL(url) {
+            return canonical
+        }
+        return nil
     }
 }
 extension AuthStore: ASWebAuthenticationPresentationContextProviding {
